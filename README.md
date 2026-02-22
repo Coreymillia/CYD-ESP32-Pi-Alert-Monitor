@@ -7,6 +7,20 @@ Fetches live network data from your local [Pi.Alert](https://github.com/pucherot
 *Mode 0: Dashboard — total devices, online/offline counts, new device alert, last scan time*
 
 ---
+## Features
+
+- 4 display modes (Dashboard, Online, Offline, New Devices)
+- Color‑coded device statuses
+- 20‑device 2‑column layout
+- Wi‑Fi captive portal for setup (no code editing required)
+- Stores settings in NVS (survives reboots)
+- Works with stock Pi.Alert API (only Mode 3 requires a small patch)
+- 30‑second auto‑refresh cycle
+
+## Why This Exists
+
+Pi.Alert is powerful, but it lives in a browser tab.  
+This project turns it into a **physical network presence monitor** you can keep on your desk — always visible, always updating, no browser required.
 
 ## What It Shows
 
@@ -257,7 +271,19 @@ CYDPiAlert/
 - This project works with the original [Pi.Alert by pucherot](https://github.com/pucherot/Pi.Alert). Forks (like IPAM, Pi.Alert CE) may have different API paths.
 
 ---
+## Upstream Project
+
+This project depends on **Pi.Alert**, created by pucherot:
+
+➡️ **Pi.Alert GitHub:** https://github.com/pucherot/Pi.Alert
+
+Pi.Alert handles all device discovery, scanning, and API responses.  
+CYDPiAlert simply displays that data on the ESP32 CYD.
 
 ## Related Project
 
 **[CYDPiHole](../CYDPiHole)** — The companion project. Displays live Pi-hole v6 DNS query data on the same CYD hardware with 3 modes: live query feed, stats summary, and top blocked domains.
+
+## License
+MIT — do whatever you want with it.
+
