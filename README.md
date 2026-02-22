@@ -282,7 +282,7 @@ CYDPiAlert simply displays that data on the ESP32 CYD.
 
 ## Related Project
 
-**[CYDPiHole](../CYDPiHole)** — The companion project. Displays live Pi-hole v6 DNS query data on the same CYD hardware with 3 modes: live query feed, stats summary, and top blocked domains.
+**(https://github.com/Coreymillia/CYD-ESP32-Pi-hole-Monitor)** — The companion project. Displays live Pi-hole v6 DNS query data on the same CYD hardware with 3 modes: live query feed, stats summary, and top blocked domains.
 
 ## License
 MIT — do whatever you want with it.
