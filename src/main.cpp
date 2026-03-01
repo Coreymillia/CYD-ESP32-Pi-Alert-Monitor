@@ -27,6 +27,22 @@ Arduino_GFX *gfx = new Arduino_ILI9341(bus, GFX_NOT_DEFINED /* RST */, 1 /* rota
  * End of display setup
  ******************************************************************************/
 
+#include <XPT2046_Touchscreen.h>
+
+// ---------------------------------------------------------------------------
+// Touch — XPT2046 on VSPI (standard CYD wiring)
+// ---------------------------------------------------------------------------
+#define XPT2046_IRQ   36
+#define XPT2046_MOSI  32
+#define XPT2046_MISO  39
+#define XPT2046_CLK   25
+#define XPT2046_CS    33
+#define TOUCH_DEBOUNCE 400
+
+SPIClass touchSPI(VSPI);
+XPT2046_Touchscreen ts(XPT2046_CS, XPT2046_IRQ);
+static unsigned long lastTouchTime = 0;
+
 #include "Portal.h"
 #include "PiAlert.h"
 
@@ -37,15 +53,20 @@ Arduino_GFX *gfx = new Arduino_ILI9341(bus, GFX_NOT_DEFINED /* RST */, 1 /* rota
 #define MODE_ONLINE     1
 #define MODE_OFFLINE    2
 #define MODE_NEW        3
-#define NUM_MODES       4
+#define MODE_DOWN       4
+#define MODE_EVENTS     5
+#define NUM_MODES       6
 
-static int currentMode = MODE_DASHBOARD;
+static int  currentMode            = MODE_DASHBOARD;
+static bool modeHasData[NUM_MODES] = {false};
 
 static const char *modeTitle[] = {
   "Pi.Alert",
   "Online Devices",
   "Offline Devices",
-  "New Devices"
+  "New Devices",
+  "Down Devices",
+  "Recent Events"
 };
 
 // ---------------------------------------------------------------------------
@@ -115,10 +136,14 @@ void drawChrome() {
     gfx->setCursor(26, COLHDR_Y + 1); gfx->print("DEVICE");
     gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP");
     gfx->setCursor(186, COLHDR_Y + 1); gfx->print("DEVICE");
-  } else if (currentMode == MODE_NEW) {
+  } else if (currentMode == MODE_NEW || currentMode == MODE_DOWN) {
     gfx->setCursor(2,  COLHDR_Y + 1); gfx->print(".IP");
     gfx->setCursor(26, COLHDR_Y + 1); gfx->print("NAME");
-    gfx->setCursor(148, COLHDR_Y + 1); gfx->print("VENDOR");
+    gfx->setCursor(176, COLHDR_Y + 1); gfx->print("VENDOR");
+  } else if (currentMode == MODE_EVENTS) {
+    gfx->setCursor(2,  COLHDR_Y + 1); gfx->print("TIME");
+    gfx->setCursor(38, COLHDR_Y + 1); gfx->print("TYPE");
+    gfx->setCursor(100, COLHDR_Y + 1); gfx->print("DEVICE");
   }
   // MODE_DASHBOARD: no column headers
 
@@ -297,7 +322,112 @@ void drawNewDevices() {
 }
 
 // ---------------------------------------------------------------------------
+// Mode 4 — Down devices (monitored devices currently offline)
+// ---------------------------------------------------------------------------
+void drawDownDevices() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (pa_down_count == 0) {
+    gfx->setTextColor(COLOR_ONLINE);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("All monitored devices are up!");
+    return;
+  }
+
+  const int nameChars = (gfx->width() - 56) / 6;
+
+  for (int i = 0; i < pa_down_count && i < 10; i++) {
+    int y = ROWS_Y + i * ROW_H;
+    gfx->fillRect(0, y, gfx->width(), ROW_H, RGB565_BLACK);
+
+    PaDownDevice &d = pa_down[i];
+
+    char octet[6];
+    paLastOctet(d.ip, octet, sizeof(octet));
+    char ipBuf[8];
+    snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(2, y + 7);
+    gfx->print(ipBuf);
+
+    char nameBuf[52];
+    truncate(d.name, nameBuf, nameChars);
+    gfx->setTextColor(COLOR_NEW);  // red — these are down
+    gfx->setCursor(26, y + 7);
+    gfx->print(nameBuf);
+
+    if (d.vendor[0] != '\0') {
+      char vendBuf[20];
+      truncate(d.vendor, vendBuf, 18);
+      gfx->setTextColor(COLOR_DIM);
+      gfx->setCursor(176, y + 7);
+      gfx->print(vendBuf);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode 5 — Recent events (connect / disconnect feed)
+// ---------------------------------------------------------------------------
+void drawEvents() {
+  // Row height is tighter here: 14px per row to fit 15 events in ~210px
+  const int evROW_H   = 14;
+  const int typeChars = 7;   // "Connect" fits in 42px
+  const int nameChars = (gfx->width() - 100) / 6;  // remaining
+
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (pa_event_count == 0) {
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No recent events.");
+    return;
+  }
+
+  for (int i = 0; i < pa_event_count; i++) {
+    int y = ROWS_Y + i * evROW_H;
+    PaEvent &e = pa_events[i];
+
+    // Event type colour: green=Connected, grey=Disconnected, red=everything else
+    uint16_t typeColor;
+    if (strncmp(e.type, "Connected", 9) == 0)         typeColor = COLOR_ONLINE;
+    else if (strncmp(e.type, "Disconnected", 12) == 0) typeColor = COLOR_DIM;
+    else                                                typeColor = COLOR_NEW;
+
+    // Time — show only HH:MM from "YYYY-MM-DD HH:MM:SS"
+    char timeBuf[6] = "??:??";
+    if (strlen(e.time) >= 16) {
+      strncpy(timeBuf, e.time + 11, 5);
+      timeBuf[5] = '\0';
+    }
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(2, y + 3);
+    gfx->print(timeBuf);
+
+    // Event type (truncated to 7 chars: "Connect", "Disconn", etc.)
+    char typeBuf[10];
+    strncpy(typeBuf, e.type, typeChars);
+    typeBuf[typeChars] = '\0';
+    gfx->setTextColor(typeColor);
+    gfx->setCursor(38, y + 3);
+    gfx->print(typeBuf);
+
+    // Device name
+    char nameBuf[52];
+    truncate(e.name, nameBuf, nameChars);
+    gfx->setTextColor(COLOR_TEXT);
+    gfx->setCursor(100, y + 3);
+    gfx->print(nameBuf);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fetch + redraw for the current mode
+// On transient fetch failure: keep stale data visible, flash error in header
 // ---------------------------------------------------------------------------
 void refreshDisplay() {
   gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x0010);
@@ -311,17 +441,30 @@ void refreshDisplay() {
   if (currentMode == MODE_ONLINE)    ok = paFetchOnline();
   if (currentMode == MODE_OFFLINE)   ok = paFetchOffline();
   if (currentMode == MODE_NEW)       ok = paFetchNew();
-
-  drawChrome();
+  if (currentMode == MODE_DOWN)      ok = paFetchDown();
+  if (currentMode == MODE_EVENTS)    ok = paFetchEvents();
 
   if (ok) {
+    modeHasData[currentMode] = true;
+    drawChrome();
     if (currentMode == MODE_DASHBOARD) drawDashboard();
     if (currentMode == MODE_ONLINE)    drawDeviceList(pa_online,  pa_online_count);
     if (currentMode == MODE_OFFLINE)   drawDeviceList(pa_offline, pa_offline_count);
     if (currentMode == MODE_NEW)       drawNewDevices();
+    if (currentMode == MODE_DOWN)      drawDownDevices();
+    if (currentMode == MODE_EVENTS)    drawEvents();
+  } else if (modeHasData[currentMode]) {
+    gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x3000);  // dark red
+    char errMsg[52];
+    snprintf(errMsg, sizeof(errMsg), "ERR: %s", pa_last_error);
+    gfx->setTextColor(COLOR_NEW);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, 3);
+    gfx->print(errMsg);
   } else {
+    drawChrome();
     gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
-    char errMsg[48];
+    char errMsg[52];
     snprintf(errMsg, sizeof(errMsg), "Fetch failed: %s", pa_last_error);
     gfx->setTextColor(COLOR_NEW);
     gfx->setTextSize(1);
@@ -370,6 +513,11 @@ void setup() {
   digitalWrite(GFX_BL, HIGH);
 
   pinMode(0, INPUT_PULLUP);
+
+  // Touch controller
+  touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  ts.begin(touchSPI);
+  ts.setRotation(1);
 
   paLoadSettings();
 
@@ -431,5 +579,31 @@ void loop() {
     refreshDisplay();
     lastRefresh = millis();
   }
+
+  // Touch: left half = previous mode, right half = next mode
+  if (ts.tirqTouched() && ts.touched()) {
+    unsigned long now = millis();
+    if (now - lastTouchTime > TOUCH_DEBOUNCE) {
+      lastTouchTime = now;
+      TS_Point p = ts.getPoint();
+      int tx = map(p.x, 200, 3900, 0, gfx->width());
+      tx = constrain(tx, 0, gfx->width() - 1);
+      if (tx < gfx->width() / 2)
+        currentMode = (currentMode + NUM_MODES - 1) % NUM_MODES;  // left → prev
+      else
+        currentMode = (currentMode + 1) % NUM_MODES;              // right → next
+      refreshDisplay();
+      lastRefresh = millis();
+    }
+  }
+
+  // Countdown bar: 1px at y=239, drains left→right over REFRESH_INTERVAL
+  unsigned long elapsed = millis() - lastRefresh;
+  int barW = (elapsed >= REFRESH_INTERVAL)
+             ? 0
+             : (int)((REFRESH_INTERVAL - elapsed) * (long)gfx->width() / REFRESH_INTERVAL);
+  gfx->drawFastHLine(0,    gfx->height() - 1, barW,                RGB565_BLUE);
+  gfx->drawFastHLine(barW, gfx->height() - 1, gfx->width() - barW, RGB565_BLACK);
+
   delay(20);
 }

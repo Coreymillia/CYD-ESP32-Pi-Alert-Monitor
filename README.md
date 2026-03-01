@@ -1,51 +1,58 @@
 # CYDPiAlert
 
 A **Pi.Alert network presence monitor** running on the **CYD (Cheap Yellow Display)** ESP32 board.  
-Fetches live network data from your local [Pi.Alert](https://github.com/pucherot/Pi.Alert) instance and displays it on the built-in 320×240 TFT, cycling through four views with the push of a button.
+Fetches live network data from your local [Pi.Alert](https://github.com/pucherot/Pi.Alert) instance and displays it on the built-in 320×240 TFT. **Touch the screen** left or right to cycle through six display modes.
 
 ![Mode 0 — Dashboard](IMG_20260222_160903.jpg)
-*Mode 0: Dashboard — total devices, online/offline counts, new device alert, last scan time*
+*Mode 0: Dashboard — total devices, online/offline counts, new/down device alerts, last scan time*
 
 ---
-## Features
-
-- 4 display modes (Dashboard, Online, Offline, New Devices)
-- Color‑coded device statuses
-- 20‑device 2‑column layout
-- Wi‑Fi captive portal for setup (no code editing required)
-- Stores settings in NVS (survives reboots)
-- Works with stock Pi.Alert API (only Mode 3 requires a small patch)
-- 30‑second auto‑refresh cycle
-
-## Why This Exists
-
-Pi.Alert is powerful, but it lives in a browser tab.  
-This project turns it into a **physical network presence monitor** you can keep on your desk — always visible, always updating, no browser required.
 
 ## What It Shows
 
-| Mode | Button Press | Description |
-|------|-------------|-------------|
-| **0 — Dashboard** | — (default) | Total devices, online count, offline count, new devices count, last scan time |
-| **1 — Online Devices** | 1 short press | All currently online devices — last IP octet + name, 2-column layout (up to 20) |
-| **2 — Offline Devices** | 2 short presses | All currently offline devices — same layout |
-| **3 — New Devices** | 3 short presses | Unknown/unacknowledged devices — IP, name, vendor chip (red alert if any) |
+| Mode | Description |
+|------|-------------|
+| **0 — Dashboard** | Total devices, online, offline, new devices count, down devices count, last scan time |
+| **1 — Online Devices** | All currently online devices — last IP octet + name, 2-column layout (up to 20) |
+| **2 — Offline Devices** | All currently offline devices — same layout |
+| **3 — New Devices** | Unknown/unacknowledged devices — IP, name, vendor (red alert if any) |
+| **4 — Down Devices** | Monitored devices that are currently offline and flagged as critical — shown in red |
+| **5 — Recent Events** | Live feed of the last 15 connect/disconnect events — time, event type, device name |
 
 ![Mode 1 — Online Devices](IMG_20260222_160929.jpg)
 *Mode 1: Online Devices — 2-column layout, up to 20 devices, last IP octet + device name*
 
-Short-press the **BOOT button** (GPIO 0) to cycle through modes.  
-Hold the **BOOT button for 3 seconds** at any time to re-enter Wi-Fi/server setup.
+---
+
+## Navigation
+
+| Action | Result |
+|--------|--------|
+| **Touch right half of screen** | Next mode → |
+| **Touch left half of screen** | ← Previous mode |
+| **Short press BOOT button** | Next mode → |
+| **Hold BOOT button 3 seconds** | Restart into WiFi/server setup |
+
+A **blue countdown bar** at the very bottom of the screen drains across over 30 seconds, showing time until the next automatic refresh.
 
 ---
 
 ## Hardware
 
-- **Board:** ESP32 CYD (ESP32-2432S028R or compatible)
-- **Display:** ILI9341 TFT 320×240, landscape
-  - DC = GPIO 2, CS = GPIO 15, SCK = GPIO 14, MOSI = GPIO 13, MISO = GPIO 12
-- **Backlight:** GPIO 21 (active HIGH)
-- **BOOT button:** GPIO 0 (active LOW, INPUT_PULLUP)
+| Function | GPIO |
+|----------|------|
+| TFT DC | 2 |
+| TFT CS | 15 |
+| TFT SCK | 14 |
+| TFT MOSI | 13 |
+| TFT MISO | 12 |
+| Backlight | 21 |
+| BOOT button | 0 |
+| Touch IRQ | 36 |
+| Touch MOSI | 32 |
+| Touch MISO | 39 |
+| Touch CLK | 25 |
+| Touch CS | 33 |
 
 > ⚠️ The ESP32 only supports **2.4 GHz** WiFi networks.
 
@@ -63,9 +70,10 @@ Mode 0 — Dashboard:
   42             18
   ──────────────────────────────────
   OFFLINE        NEW DEVICES
-  24             3
+  22             3
   ──────────────────────────────────
   Last scan: 14:32:05
+  ! 2 device(s) marked DOWN
 
 Mode 1/2 — Device list (2 columns, 10 rows each):
   .5   My-PC            .22  SmartTV
@@ -74,10 +82,29 @@ Mode 1/2 — Device list (2 columns, 10 rows each):
 
 Mode 3 — New Devices:
   3 NEW DEVICES DETECTED
-  .116  (unknown)       (Unknown)
-  .121  (unknown)       Espressif Inc.
+  .116  (unknown)        Espressif Inc.
   ...  (green "Network looks clean!" if none)
+
+Mode 4 — Down Devices:
+  .12   NAS-Server       Synology Inc.
+  .31   Security-Cam     Hikvision
+  ...  (green "All monitored devices are up!" if none)
+
+Mode 5 — Recent Events:
+  TIME   TYPE     DEVICE
+  14:32  Connect  My-PC
+  14:30  Disconn  SmartTV
+  ...
 ```
+
+---
+
+## Error Handling
+
+When a fetch fails (network hiccup, Pi.Alert busy):
+- If the mode has **previously loaded data**, the last good data stays on screen and only the header bar turns red with the error message. Data is never wiped on a transient failure.
+- If there is **no prior data** (e.g. first boot), the error is shown in the data area as usual.
+- The HTTP request is retried up to **3 times** with increasing delays (800 ms, then 1600 ms) before giving up.
 
 ---
 
@@ -85,66 +112,80 @@ Mode 3 — New Devices:
 
 ### Pi.Alert Server
 
-- **Pi.Alert** installed and running (tested with Pi.Alert on Raspberry Pi OS)
+- **Pi.Alert** installed and running (tested with the original [Pi.Alert by pucherot](https://github.com/pucherot/Pi.Alert))
 - **API key** configured in Pi.Alert → **Maintenance** → **API Key**
-- Pi.Alert must be accessible on your local network via HTTP
+- Pi.Alert accessible on your local network via HTTP
 
-### Modes 0–2: No server changes needed
+### Server Modifications Required
 
-These modes use the built-in Pi.Alert API endpoints (`system-status`, `all-online`, `all-offline`) which are available by default.
+Three of the six modes use API endpoints that **do not exist** in Pi.Alert by default. You need to add them manually to one PHP file on your Pi.Alert server. See the [Pi.Alert Server Modifications](#pialert-server-modifications) section below.
 
-### Mode 3 (New Devices): Requires a one-time server modification
-
-Mode 3 queries an `all-new` endpoint that does **not** exist in Pi.Alert by default. You need to add it manually to the Pi.Alert API file.
+| Mode | Endpoint | Requires modification? |
+|------|----------|------------------------|
+| 0 — Dashboard | `system-status` | No — built-in |
+| 1 — Online | `all-online` | No — built-in |
+| 2 — Offline | `all-offline` | No — built-in |
+| 3 — New Devices | `all-new` | **Yes** |
+| 4 — Down Devices | `all-down` | **Yes** |
+| 5 — Recent Events | `recent-events` | **Yes** |
 
 ---
 
-![Mode 3 — New Devices](IMG_20260222_161106.jpg)
-*Mode 3: New Devices — requires the Pi.Alert server modification below. Shows unacknowledged devices with IP, name, and vendor chip in red.*
+## Pi.Alert Server Modifications
+
+> ⚠️ This is a one-time change to a single PHP file. It adds three new read-only API endpoints. It does not affect any existing Pi.Alert functionality.
+
+The complete modified `index.php` is included in this repo at [`pialert-patch/index.php`](pialert-patch/index.php). You can either copy it directly or apply the changes manually.
+
+### Option A — Copy the patched file directly (easiest)
+
+```bash
+# Back up the original
+sudo cp /opt/pialert/front/api/index.php /opt/pialert/front/api/index.php.bak
+
+# Copy the patched version (from this repo)
+sudo cp pialert-patch/index.php /opt/pialert/front/api/index.php
+sudo chown www-data:www-data /opt/pialert/front/api/index.php
+```
+
+> ⚠️ The patched file is based on Pi.Alert as installed from the official repo. If your version has local customisations, use **Option B** instead.
 
 ---
 
-## Adding the `all-new` API Endpoint to Pi.Alert
+### Option B — Apply changes manually
 
-> ⚠️ This is a one-time change. It modifies one PHP file on your Pi.Alert server. It does not affect any existing functionality.
-
-### Step 1 — SSH into your Pi.Alert server
+#### Step 1 — SSH into your Pi.Alert server
 
 ```bash
 ssh your-username@your-pi-alert-ip
-```
-
-### Step 2 — Open the API file
-
-Pi.Alert is typically installed at `/opt/pialert/`. Open the API file:
-
-```bash
 sudo nano /opt/pialert/front/api/index.php
 ```
 
-### Step 3 — Add the `all-new` case to the switch block
+#### Step 2 — Add three new cases to the switch block
 
-Find this block near the top of the file (around line 50):
-
-```php
-case 'all-offline-icmp':getAllOffline_ICMP();
-    break;
-}
-```
-
-Add the new case **before** the closing `}`:
+Find the switch block (around line 50) that ends with:
 
 ```php
-case 'all-offline-icmp':getAllOffline_ICMP();
-    break;
-case 'all-new':getAllNew();
-    break;
-}
+    case 'all-new':getAllNew();
+        break;
+    }
 ```
 
-### Step 4 — Add the `getAllNew()` function
+Add the three new cases **before** the closing `}`:
 
-Find the closing `?>` PHP tag near the **bottom** of the file (before the last comment block). Add the new function **before** the `?>`:
+```php
+    case 'all-new':getAllNew();
+        break;
+    case 'all-down':getAllDown();
+        break;
+    case 'recent-events':getRecentEvents();
+        break;
+    }
+```
+
+#### Step 3 — Add three new functions
+
+Find the closing `?>` tag at the very bottom of the file and add these functions **before** it:
 
 ```php
 //example curl -k -X POST -F 'api-key=key' -F 'get=all-new' https://url/pialert/api/
@@ -170,28 +211,67 @@ function getAllNew() {
     echo "\n";
 }
 
+//example curl -k -X POST -F 'api-key=key' -F 'get=all-down' https://url/pialert/api/
+function getAllDown() {
+    global $db;
+    $sql = 'SELECT dev_Name, dev_LastIP, dev_Vendor FROM Devices
+            WHERE dev_AlertDeviceDown=1 AND dev_PresentLastScan=0 AND dev_Archived=0
+            ORDER BY dev_Name ASC';
+    $results_array = array();
+    $results = $db->query($sql);
+    $i = 0;
+    while ($row = $results->fetchArray()) {
+        $results_array[$i]['dev_Name']   = $row['dev_Name'];
+        $results_array[$i]['dev_LastIP'] = $row['dev_LastIP'];
+        $results_array[$i]['dev_Vendor'] = $row['dev_Vendor'];
+        $i++;
+    }
+    echo json_encode($results_array);
+    echo "\n";
+}
+
+//example curl -k -X POST -F 'api-key=key' -F 'get=recent-events' https://url/pialert/api/
+function getRecentEvents() {
+    global $db;
+    $sql = 'SELECT e.eve_DateTime, e.eve_EventType, e.eve_IP, d.dev_Name
+            FROM Events e
+            LEFT JOIN Devices d ON e.eve_MAC = d.dev_MAC
+            ORDER BY e.eve_DateTime DESC LIMIT 15';
+    $results_array = array();
+    $results = $db->query($sql);
+    $i = 0;
+    while ($row = $results->fetchArray()) {
+        $results_array[$i]['eve_DateTime']  = $row['eve_DateTime'];
+        $results_array[$i]['eve_EventType'] = $row['eve_EventType'];
+        $results_array[$i]['eve_IP']        = $row['eve_IP'];
+        $results_array[$i]['dev_Name']      = $row['dev_Name'] ? $row['dev_Name'] : 'Unknown';
+        $i++;
+    }
+    echo json_encode($results_array);
+    echo "\n";
+}
 ?>
 ```
 
-> ⚠️ **Important:** The function must be placed **inside** the PHP block — before the closing `?>` tag, not after it. If placed after `?>`, PHP will treat it as plain text and it will not execute.
-
-### Step 5 — Verify it works
+#### Step 4 — Verify the endpoints work
 
 ```bash
-curl -s -X POST \
-  -F "api-key=YOUR_API_KEY_HERE" \
-  -F "get=all-new" \
-  http://your-pi-alert-ip/pialert/api/
+APIKEY="your-api-key-here"
+HOST="your-pi-alert-ip"
+
+curl -s -X POST -F "api-key=$APIKEY" -F "get=all-new"       http://$HOST/pialert/api/
+curl -s -X POST -F "api-key=$APIKEY" -F "get=all-down"      http://$HOST/pialert/api/
+curl -s -X POST -F "api-key=$APIKEY" -F "get=recent-events" http://$HOST/pialert/api/
 ```
 
-You should get a JSON array back. An empty array `[]` means no unacknowledged devices — that's fine and correct.
+Each should return a JSON array. `[]` means no devices in that category — that's correct.
 
 ---
 
 ## First-Time Setup (ESP32)
 
 1. Flash the firmware using PlatformIO (`pio run --target upload`)
-2. On first boot, the display shows **"CYDPiAlert Setup"** and the ESP32 broadcasts a WiFi access point:
+2. On first boot, the ESP32 broadcasts a setup access point:
    ```
    SSID: CYDPiAlert_Setup   (no password)
    ```
@@ -203,24 +283,18 @@ You should get a JSON array back. An empty array `[]` means no unacknowledged de
    - **Pi.Alert IP / Hostname** — bare IP only, e.g. `192.168.0.105` (no `http://`, no `/pialert/`)
    - **Pi.Alert API Key** — found in Pi.Alert → Maintenance → API Key
 6. Tap **Save & Connect**
-7. Close the browser and disconnect from `CYDPiAlert_Setup`
 
-Settings are stored in flash (NVS) and survive reboots.
-
-### Re-entering Setup
-
-Hold the **BOOT button for 3 seconds** while the device is running. The screen will say "Restarting setup..." and the device will reboot into setup mode.
-
-Alternatively, hold BOOT at power-on before the 3-second window expires.
+Settings are stored in flash (NVS) and survive reboots. To re-enter setup, hold **BOOT for 3 seconds** at any time.
 
 ---
 
 ## Building with PlatformIO
 
-### Dependencies (auto-installed by PlatformIO)
+### Dependencies (auto-installed)
 
 - `moononournation/GFX Library for Arduino @ 1.4.7`
 - `bblanchon/ArduinoJson @ ^7`
+- `PaulStoffregen/XPT2046_Touchscreen` (via GitHub)
 
 ### Build & Upload
 
@@ -229,7 +303,7 @@ cd /path/to/CYDPiAlert
 pio run --target upload
 ```
 
-### Serial Monitor (debug output)
+### Serial Monitor
 
 ```bash
 pio device monitor --baud 115200
@@ -241,12 +315,14 @@ pio device monitor --baud 115200
 
 ```
 CYDPiAlert/
-├── platformio.ini          # PlatformIO config (board, libs)
+├── platformio.ini              # PlatformIO config (board, libs)
+├── pialert-patch/
+│   └── index.php               # Modified Pi.Alert API file (drop-in replacement)
 ├── include/
-│   ├── Portal.h            # Captive portal: WiFi + Pi.Alert credentials, NVS persistence
-│   └── PiAlert.h           # HTTP fetch functions + data structs for all modes
+│   ├── Portal.h                # Captive portal: WiFi + Pi.Alert credentials, NVS
+│   └── PiAlert.h               # HTTP fetch functions + data structs for all modes
 └── src/
-    └── main.cpp            # Display init, mode logic, draw functions, button handling
+    └── main.cpp                # Display init, mode logic, draw functions, touch + button
 ```
 
 ---
@@ -255,35 +331,26 @@ CYDPiAlert/
 
 | Error on screen | Cause | Fix |
 |----------------|-------|-----|
-| `Fetch failed: Wrong API key` | API key doesn't match Pi.Alert | Re-enter setup, copy key from Pi.Alert → Maintenance → API Key |
-| `Fetch failed: HTTP 404` | Wrong Pi.Alert host, or `/pialert/` path not found | Check the IP — enter bare IP only (e.g. `192.168.0.105`) |
-| `Fetch failed: JSON error` | Mode 3 `all-new` endpoint missing | Follow the server modification steps above |
-| `Fetch failed: No connection` | WiFi dropped | Device retries on next 30s interval; check router |
+| `ERR: Wrong API key` | API key doesn't match Pi.Alert | Re-enter setup, copy key from Pi.Alert → Maintenance → API Key |
+| `Fetch failed: HTTP 404` | Wrong Pi.Alert host or path | Enter bare IP only, e.g. `192.168.0.105` |
+| `Fetch failed: JSON error` | Missing API endpoint | Follow the Pi.Alert server modification steps above |
+| `Fetch failed: No connection` | WiFi dropped | Retries automatically on next 30s interval |
 | `WiFi failed: "YourSSID"` | Wrong SSID or password | Hold BOOT 3s to re-enter setup |
-| Screen stays on "Refreshing..." | Pi.Alert scan still running | Wait for Pi.Alert scan to complete (default scan interval: ~3–5 min) |
+| Screen stays on "Refreshing..." | Pi.Alert scan still running | Wait — Pi.Alert scans run every 3–5 minutes |
 
 ---
 
 ## Notes
 
-- Refresh interval is **30 seconds**. Pi.Alert scans typically run every 3–5 minutes, so the dashboard data only changes that often.
-- "New Devices" in Mode 3 shows devices Pi.Alert has detected but that you haven't acknowledged in the Pi.Alert web UI. You can dismiss them in Pi.Alert → Devices to clear them from this view.
-- This project works with the original [Pi.Alert by pucherot](https://github.com/pucherot/Pi.Alert). Forks (like IPAM, Pi.Alert CE) may have different API paths.
+- Refresh interval is **30 seconds**. Pi.Alert's ARP scan runs every 3–5 minutes so dashboard counts only change that often.
+- **Mode 3 — New Devices** shows devices Pi.Alert detected but you haven't acknowledged. Clear them in Pi.Alert → Devices.
+- **Mode 4 — Down Devices** only shows devices that have `Alert when down` enabled in Pi.Alert device settings. Devices not flagged will appear in Mode 2 (Offline) instead.
+- **Mode 5 — Recent Events** includes all event types: `Connected`, `Disconnected`, `VOIDED - Connected`, etc. `VOIDED` events are normal — Pi.Alert uses them to correct scan anomalies.
+- Compatible with the original [Pi.Alert by pucherot](https://github.com/pucherot/Pi.Alert). Forks (Pi.Alert CE, IPAM) may have different API paths or database schemas.
 
 ---
-## Upstream Project
-
-This project depends on **Pi.Alert**, created by pucherot:
-
-➡️ **Pi.Alert GitHub:** https://github.com/pucherot/Pi.Alert
-
-Pi.Alert handles all device discovery, scanning, and API responses.  
-CYDPiAlert simply displays that data on the ESP32 CYD.
 
 ## Related Project
 
-**(https://github.com/Coreymillia/CYD-ESP32-Pi-hole-Monitor)** — The companion project. Displays live Pi-hole v6 DNS query data on the same CYD hardware with 3 modes: live query feed, stats summary, and top blocked domains.
-
-## License
-MIT — do whatever you want with it.
+**[CYDPiHole](../CYDPiHole)** — Displays live Pi-hole v6 DNS query data on the same CYD hardware with 5 modes: live query feed, stats summary, top blocked domains, top clients, and 24h activity graph.
 

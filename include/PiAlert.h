@@ -66,31 +66,144 @@ static int paPost(const char *get_param, String &out) {
     return -1;
   }
 
-  WiFiClient client;
-  HTTPClient http;
-  http.setTimeout(8000);
-
   char url[80];
   snprintf(url, sizeof(url), "http://%s/pialert/api/", pa_host);
-
-  if (!http.begin(client, url)) return -1;
-
-  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
   char body[160];
   snprintf(body, sizeof(body), "api-key=%s&get=%s", pa_apikey, get_param);
 
-  int code = http.POST(body);
-  if (code == HTTP_CODE_OK) {
-    out = http.getString();
-    // Pi.Alert returns plain text on bad API key
-    if (out.startsWith("Wrong API-Key")) {
-      snprintf(pa_last_error, sizeof(pa_last_error), "Wrong API key");
-      http.end();
-      return 403;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      Serial.printf("[PiAlert] begin() failed, retry %d...\n", attempt);
+      delay(attempt * 800);
     }
+    WiFiClient client;
+    HTTPClient http;
+    http.setTimeout(8000);
+    if (!http.begin(client, url)) continue;
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    int code = http.POST(body);
+    if (code == HTTP_CODE_OK) {
+      out = http.getString();
+      http.end();
+      if (out.startsWith("Wrong API-Key")) {
+        snprintf(pa_last_error, sizeof(pa_last_error), "Wrong API key");
+        return 403;
+      }
+      return code;
+    }
+    http.end();
+    return code;
   }
-  http.end();
-  return code;
+  return -1;
+}
+
+// ---------------------------------------------------------------------------
+// Down devices (Mode 4) — devices marked to alert when down, currently offline
+// ---------------------------------------------------------------------------
+#define PA_MAX_DOWN 20
+
+struct PaDownDevice {
+  char name[32];
+  char ip[16];
+  char vendor[32];
+  bool valid;
+};
+
+static PaDownDevice pa_down[PA_MAX_DOWN];
+static int          pa_down_count = 0;
+
+static bool paFetchDown() {
+  String payload;
+  int code = paPost("all-down", payload);
+  if (code != HTTP_CODE_OK) {
+    if (code != 403) snprintf(pa_last_error, sizeof(pa_last_error),
+                              code == -1 ? "No connection" : "HTTP %d", code);
+    return false;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "JSON error");
+    return false;
+  }
+
+  JsonArray arr = doc.as<JsonArray>();
+  if (arr.isNull()) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "No device array");
+    return false;
+  }
+
+  pa_down_count = 0;
+  for (JsonObject dev : arr) {
+    if (pa_down_count >= PA_MAX_DOWN) break;
+    PaDownDevice &d = pa_down[pa_down_count++];
+    strncpy(d.name,   dev["dev_Name"]   | "Unknown", sizeof(d.name)   - 1);
+    strncpy(d.ip,     dev["dev_LastIP"] | "",         sizeof(d.ip)     - 1);
+    strncpy(d.vendor, dev["dev_Vendor"] | "",         sizeof(d.vendor) - 1);
+    d.name[sizeof(d.name)-1]     = '\0';
+    d.ip[sizeof(d.ip)-1]         = '\0';
+    d.vendor[sizeof(d.vendor)-1] = '\0';
+    d.valid = true;
+  }
+
+  Serial.printf("[PiAlert] Down: %d devices\n", pa_down_count);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Recent events (Mode 5) — last 15 connect/disconnect events
+// ---------------------------------------------------------------------------
+#define PA_MAX_EVENTS 15
+
+struct PaEvent {
+  char name[32];
+  char ip[16];
+  char type[24];    // "Connected", "Disconnected", etc.
+  char time[20];    // "YYYY-MM-DD HH:MM:SS"
+  bool valid;
+};
+
+static PaEvent  pa_events[PA_MAX_EVENTS];
+static int      pa_event_count = 0;
+
+static bool paFetchEvents() {
+  String payload;
+  int code = paPost("recent-events", payload);
+  if (code != HTTP_CODE_OK) {
+    if (code != 403) snprintf(pa_last_error, sizeof(pa_last_error),
+                              code == -1 ? "No connection" : "HTTP %d", code);
+    return false;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "JSON error");
+    return false;
+  }
+
+  JsonArray arr = doc.as<JsonArray>();
+  if (arr.isNull()) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "No events array");
+    return false;
+  }
+
+  pa_event_count = 0;
+  for (JsonObject ev : arr) {
+    if (pa_event_count >= PA_MAX_EVENTS) break;
+    PaEvent &e = pa_events[pa_event_count++];
+    strncpy(e.name, ev["dev_Name"]      | "Unknown", sizeof(e.name) - 1);
+    strncpy(e.ip,   ev["eve_IP"]        | "",         sizeof(e.ip)   - 1);
+    strncpy(e.type, ev["eve_EventType"] | "",         sizeof(e.type) - 1);
+    strncpy(e.time, ev["eve_DateTime"]  | "",         sizeof(e.time) - 1);
+    e.name[sizeof(e.name)-1] = '\0';
+    e.ip[sizeof(e.ip)-1]     = '\0';
+    e.type[sizeof(e.type)-1] = '\0';
+    e.time[sizeof(e.time)-1] = '\0';
+    e.valid = true;
+  }
+
+  Serial.printf("[PiAlert] Events: %d\n", pa_event_count);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
