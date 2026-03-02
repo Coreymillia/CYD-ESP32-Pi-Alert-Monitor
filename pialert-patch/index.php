@@ -56,6 +56,8 @@ if (isset($_REQUEST['get']) && !empty($_REQUEST['get'])) {
 		break;
 	case 'recent-events':getRecentEvents();
 		break;
+	case 'ip-changes':getIPChanges();
+		break;
 	}
 }
 
@@ -310,6 +312,32 @@ function getRecentEvents() {
 		$i++;
 	}
 	echo json_encode($results_array);
+	echo "\n";
+}
+
+// Returns the 20 most recently seen (MAC, IP) pairs so you can track which
+// MAC addresses have been using which IP addresses over time.
+function getIPChanges() {
+	global $db;
+	$sql = 'SELECT e.eve_MAC, COALESCE(d.dev_Name, "Unknown") as dev_Name,
+	               e.eve_IP, MAX(e.eve_DateTime) as last_seen
+	        FROM Events e
+	        LEFT JOIN Devices d ON e.eve_MAC = d.dev_MAC
+	        WHERE e.eve_IP != "" AND e.eve_IP IS NOT NULL
+	        GROUP BY e.eve_MAC, e.eve_IP
+	        ORDER BY last_seen DESC
+	        LIMIT 20';
+	$results = $db->query($sql);
+	$out = array();
+	$i = 0;
+	while ($row = $results->fetchArray()) {
+		$out[$i]['eve_MAC']   = $row['eve_MAC'];
+		$out[$i]['dev_Name']  = $row['dev_Name'];
+		$out[$i]['eve_IP']    = $row['eve_IP'];
+		$out[$i]['last_seen'] = $row['last_seen'];
+		$i++;
+	}
+	echo json_encode($out);
 	echo "\n";
 }
 ?>

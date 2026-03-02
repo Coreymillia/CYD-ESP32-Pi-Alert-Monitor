@@ -1,7 +1,7 @@
 # CYDPiAlert
 
 A **Pi.Alert network presence monitor** running on the **CYD (Cheap Yellow Display)** ESP32 board.  
-Fetches live network data from your local [Pi.Alert](https://github.com/pucherot/Pi.Alert) instance and displays it on the built-in 320×240 TFT. **Touch the screen** left or right to cycle through six display modes.
+Fetches live network data from your local [Pi.Alert](https://github.com/pucherot/Pi.Alert) instance and displays it on the built-in 320×240 TFT. **Touch the screen** left or right to cycle through seven display modes.
 
 ![Mode 0 — Dashboard](IMG_20260222_160903.jpg)
 *Mode 0: Dashboard — total devices, online/offline counts, new/down device alerts, last scan time*
@@ -18,6 +18,7 @@ Fetches live network data from your local [Pi.Alert](https://github.com/pucherot
 | **3 — New Devices** | Unknown/unacknowledged devices — IP, name, vendor (red alert if any) |
 | **4 — Down Devices** | Monitored devices that are currently offline and flagged as critical — shown in red |
 | **5 — Recent Events** | Live feed of the last 15 connect/disconnect events — time, event type, device name |
+| **6 — IP History** | Last 20 distinct MAC→IP pairs seen on the network — name on top, full MAC below (yellow if named, grey if unknown). Useful for tracking devices with changing IPs (e.g. ESP32s, phones) |
 
 ![Mode 1 — Online Devices](IMG_20260222_160929.jpg)
 *Mode 1: Online Devices — 2-column layout, up to 20 devices, last IP octet + device name*
@@ -95,6 +96,14 @@ Mode 5 — Recent Events:
   14:32  Connect  My-PC
   14:30  Disconn  SmartTV
   ...
+
+Mode 6 — IP History (2 columns, 10 rows each):
+  .IP  NAME  /  MAC        .IP  NAME  /  MAC
+  .119  Pi-Alert            .114  (unknown)
+  10:52:1c:f6:5e:4c         88:57:21:43:fa:ac
+  .110  LAPTOP-ABQTBN9A     .118  (unknown)
+  22:6d:13:0e:32:ea         3c:8a:1f:d7:72:44
+  ...  (named devices in yellow, unknown in grey)
 ```
 
 ---
@@ -128,6 +137,7 @@ Three of the six modes use API endpoints that **do not exist** in Pi.Alert by de
 | 3 — New Devices | `all-new` | **Yes** |
 | 4 — Down Devices | `all-down` | **Yes** |
 | 5 — Recent Events | `recent-events` | **Yes** |
+| 6 — IP History | `ip-changes` | **Yes** |
 
 ---
 

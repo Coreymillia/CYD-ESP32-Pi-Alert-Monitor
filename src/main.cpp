@@ -55,7 +55,8 @@ static unsigned long lastTouchTime = 0;
 #define MODE_NEW        3
 #define MODE_DOWN       4
 #define MODE_EVENTS     5
-#define NUM_MODES       6
+#define MODE_MAC        6
+#define NUM_MODES       7
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
@@ -66,7 +67,8 @@ static const char *modeTitle[] = {
   "Offline Devices",
   "New Devices",
   "Down Devices",
-  "Recent Events"
+  "Recent Events",
+  "IP History"
 };
 
 // ---------------------------------------------------------------------------
@@ -86,6 +88,7 @@ static const char *modeTitle[] = {
 #define COLOR_HEADER   0x001F   // dark blue
 #define COLOR_TEXT     RGB565_WHITE
 #define COLOR_DIM      0x8410   // grey
+#define COLOR_MAC      0xFFE0   // yellow — IP History mode
 
 // ---------------------------------------------------------------------------
 // Status display (used during WiFi connect / errors)
@@ -144,6 +147,11 @@ void drawChrome() {
     gfx->setCursor(2,  COLHDR_Y + 1); gfx->print("TIME");
     gfx->setCursor(38, COLHDR_Y + 1); gfx->print("TYPE");
     gfx->setCursor(100, COLHDR_Y + 1); gfx->print("DEVICE");
+  } else if (currentMode == MODE_MAC) {
+    gfx->setCursor(2,  COLHDR_Y + 1); gfx->print(".IP");
+    gfx->setCursor(26, COLHDR_Y + 1); gfx->print("NAME  /  MAC");
+    gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP");
+    gfx->setCursor(186, COLHDR_Y + 1); gfx->print("NAME  /  MAC");
   }
   // MODE_DASHBOARD: no column headers
 
@@ -426,7 +434,57 @@ void drawEvents() {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch + redraw for the current mode
+// Mode 6 — IP History: 20 most recently seen (MAC → IP) pairs in 2 columns
+// Each entry shows 2 lines: ".IP  Name" on top, MAC dimmed below.
+// ---------------------------------------------------------------------------
+void drawMacHistory() {
+  const int colW      = gfx->width() / 2;   // 160px
+  const int nameChars = (colW - 26) / 6;    // ~22 chars for name
+  const int macChars  = (colW - 4)  / 6;    // ~26 chars for MAC (fits 17)
+
+  gfx->drawFastVLine(colW, ROWS_Y, gfx->height() - ROWS_Y, COLOR_DIM);
+
+  for (int i = 0; i < PA_MAX_MAC_HISTORY; i++) {
+    int col   = i / 10;
+    int row   = i % 10;
+    int xBase = col * colW;
+    int y     = ROWS_Y + row * ROW_H;
+
+    gfx->fillRect(xBase, y, colW - 1, ROW_H, RGB565_BLACK);
+    if (i >= pa_mac_count || !pa_mac_history[i].valid) continue;
+
+    PaMacEntry &e = pa_mac_history[i];
+
+    // Top line: .IP  Name
+    char octet[6];
+    paLastOctet(e.ip, octet, sizeof(octet));
+    char ipBuf[8];
+    snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(xBase + 2, y + 2);
+    gfx->print(ipBuf);
+
+    bool isUnknown = (e.name[0] == '\0' ||
+                      strcmp(e.name, "Unknown")   == 0 ||
+                      strcmp(e.name, "(unknown)") == 0 ||
+                      strcmp(e.name, "unknown")   == 0);
+    char nameBuf[26];
+    truncate(e.name, nameBuf, nameChars);
+    gfx->setTextColor(isUnknown ? COLOR_DIM : COLOR_MAC);
+    gfx->setCursor(xBase + 26, y + 2);
+    gfx->print(nameBuf);
+
+    // Bottom line: MAC address (always shown, dimmed)
+    char macBuf[20];
+    truncate(e.mac, macBuf, macChars);
+    gfx->setTextColor(0x4208);  // dark grey — subtle but readable
+    gfx->setCursor(xBase + 2, y + 12);
+    gfx->print(macBuf);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // On transient fetch failure: keep stale data visible, flash error in header
 // ---------------------------------------------------------------------------
 void refreshDisplay() {
@@ -443,6 +501,7 @@ void refreshDisplay() {
   if (currentMode == MODE_NEW)       ok = paFetchNew();
   if (currentMode == MODE_DOWN)      ok = paFetchDown();
   if (currentMode == MODE_EVENTS)    ok = paFetchEvents();
+  if (currentMode == MODE_MAC)       ok = paFetchMacHistory();
 
   if (ok) {
     modeHasData[currentMode] = true;
@@ -453,6 +512,7 @@ void refreshDisplay() {
     if (currentMode == MODE_NEW)       drawNewDevices();
     if (currentMode == MODE_DOWN)      drawDownDevices();
     if (currentMode == MODE_EVENTS)    drawEvents();
+    if (currentMode == MODE_MAC)       drawMacHistory();
   } else if (modeHasData[currentMode]) {
     gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x3000);  // dark red
     char errMsg[52];

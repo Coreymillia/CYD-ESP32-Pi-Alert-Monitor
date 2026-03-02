@@ -207,6 +207,63 @@ static bool paFetchEvents() {
 }
 
 // ---------------------------------------------------------------------------
+// IP History (Mode 6) — last 20 distinct (MAC, IP) pairs seen on the network
+// Useful for tracking which MAC addresses are using which IPs over time.
+// ---------------------------------------------------------------------------
+#define PA_MAX_MAC_HISTORY 20
+
+struct PaMacEntry {
+  char mac[18];    // "aa:bb:cc:dd:ee:ff"
+  char name[32];   // device name, or "Unknown"
+  char ip[16];
+  char time[20];   // "YYYY-MM-DD HH:MM:SS"
+  bool valid;
+};
+
+static PaMacEntry pa_mac_history[PA_MAX_MAC_HISTORY];
+static int        pa_mac_count = 0;
+
+static bool paFetchMacHistory() {
+  String payload;
+  int code = paPost("ip-changes", payload);
+  if (code != HTTP_CODE_OK) {
+    if (code != 403) snprintf(pa_last_error, sizeof(pa_last_error),
+                              code == -1 ? "No connection" : "HTTP %d", code);
+    return false;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "JSON error");
+    return false;
+  }
+
+  JsonArray arr = doc.as<JsonArray>();
+  if (arr.isNull()) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "No history array");
+    return false;
+  }
+
+  pa_mac_count = 0;
+  for (JsonObject ev : arr) {
+    if (pa_mac_count >= PA_MAX_MAC_HISTORY) break;
+    PaMacEntry &e = pa_mac_history[pa_mac_count++];
+    strncpy(e.mac,  ev["eve_MAC"]   | "",        sizeof(e.mac)  - 1);
+    strncpy(e.name, ev["dev_Name"]  | "Unknown", sizeof(e.name) - 1);
+    strncpy(e.ip,   ev["eve_IP"]    | "",         sizeof(e.ip)   - 1);
+    strncpy(e.time, ev["last_seen"] | "",         sizeof(e.time) - 1);
+    e.mac[sizeof(e.mac)-1]   = '\0';
+    e.name[sizeof(e.name)-1] = '\0';
+    e.ip[sizeof(e.ip)-1]     = '\0';
+    e.time[sizeof(e.time)-1] = '\0';
+    e.valid = true;
+  }
+
+  Serial.printf("[PiAlert] MAC history: %d entries\n", pa_mac_count);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Returns just the last octet of an IP string ("192.168.0.5" -> "5")
 // ---------------------------------------------------------------------------
 static void paLastOctet(const char *ip, char *buf, size_t bufLen) {
