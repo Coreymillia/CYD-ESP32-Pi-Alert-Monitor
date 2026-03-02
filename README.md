@@ -356,6 +356,7 @@ CYDPiAlert/
 - **Mode 3 — New Devices** shows devices Pi.Alert detected but you haven't acknowledged. Clear them in Pi.Alert → Devices.
 - **Mode 4 — Down Devices** only shows devices that have `Alert when down` enabled in Pi.Alert device settings. Devices not flagged will appear in Mode 2 (Offline) instead.
 - **Mode 5 — Recent Events** includes all event types: `Connected`, `Disconnected`, `VOIDED - Connected`, etc. `VOIDED` events are normal — Pi.Alert uses them to correct scan anomalies.
+- **Mode 6 — IP History** shows the 20 most recently seen MAC→IP pairs grouped by unique combination, ordered newest first. Each row shows the device name (yellow) or `(unknown)` (grey) on the top line, with the full MAC address dimmed below. Use this to correlate unknown devices (ESP32s, phones, etc.) to their MAC addresses and then assign names in Pi.Alert.
 - Compatible with the original [Pi.Alert by pucherot](https://github.com/pucherot/Pi.Alert). Forks (Pi.Alert CE, IPAM) may have different API paths or database schemas.
 
 ---
