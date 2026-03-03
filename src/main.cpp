@@ -56,7 +56,8 @@ static unsigned long lastTouchTime = 0;
 #define MODE_DOWN       4
 #define MODE_EVENTS     5
 #define MODE_MAC        6
-#define NUM_MODES       7
+#define MODE_UPTIME     7
+#define NUM_MODES       8
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
@@ -68,7 +69,8 @@ static const char *modeTitle[] = {
   "New Devices",
   "Down Devices",
   "Recent Events",
-  "IP History"
+  "IP History",
+  "Uptime"
 };
 
 // ---------------------------------------------------------------------------
@@ -152,6 +154,10 @@ void drawChrome() {
     gfx->setCursor(26, COLHDR_Y + 1); gfx->print("NAME  /  MAC");
     gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP");
     gfx->setCursor(186, COLHDR_Y + 1); gfx->print("NAME  /  MAC");
+  } else if (currentMode == MODE_UPTIME) {
+    gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP");
+    gfx->setCursor(30,  COLHDR_Y + 1); gfx->print("UPTIME");
+    gfx->setCursor(284, COLHDR_Y + 1); gfx->print("AGO");
   }
   // MODE_DASHBOARD: no column headers
 
@@ -484,9 +490,77 @@ void drawMacHistory() {
   }
 }
 
+
 // ---------------------------------------------------------------------------
-// On transient fetch failure: keep stale data visible, flash error in header
+// Mode 7 — Uptime Bars: horizontal bar per online device proportional to how
+// long it has been connected. Shortest bar at top (most recent), longest last.
+// Bar color: green if named, grey if unknown. Time label right-aligned.
 // ---------------------------------------------------------------------------
+void drawUptimeBars() {
+  const int rowH   = 10;   // fits 20 devices in ~210px
+  const int ipW    = 28;   // ".xxx" label width
+  const int timeW  = 30;   // right-side time label ("99d" etc.)
+  const int barX   = ipW + 2;
+  const int barMaxW = gfx->width() - barX - timeW - 2;
+
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (pa_uptime_count == 0) {
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No online devices.");
+    return;
+  }
+
+  // Find max minutes for proportional scaling
+  int maxMin = 1;
+  for (int i = 0; i < pa_uptime_count; i++) {
+    if (pa_uptime[i].minutes > maxMin) maxMin = pa_uptime[i].minutes;
+  }
+
+  for (int i = 0; i < pa_uptime_count; i++) {
+    int y = ROWS_Y + i * rowH;
+    PaUptimeEntry &e = pa_uptime[i];
+
+    bool isUnknown = (e.name[0] == '\0' ||
+                      strcmp(e.name, "Unknown")   == 0 ||
+                      strcmp(e.name, "(unknown)") == 0 ||
+                      strcmp(e.name, "unknown")   == 0);
+
+    // IP last octet
+    char octet[6];
+    paLastOctet(e.ip, octet, sizeof(octet));
+    char ipBuf[8];
+    snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(2, y + 1);
+    gfx->print(ipBuf);
+
+    // Proportional bar
+    int barW = (int)((long)e.minutes * barMaxW / maxMin);
+    if (barW < 1 && e.minutes > 0) barW = 1;
+    uint16_t barColor = isUnknown ? 0x2945 : COLOR_ONLINE;  // grey or green
+    if (barW > 0)
+      gfx->fillRect(barX, y + 1, barW, rowH - 2, barColor);
+    // Clear remainder of bar area
+    if (barW < barMaxW)
+      gfx->fillRect(barX + barW, y + 1, barMaxW - barW, rowH - 2, RGB565_BLACK);
+
+    // Time label: "XXm", "XXh", or "XXd"
+    char timeBuf[6];
+    if (e.minutes < 60)        snprintf(timeBuf, sizeof(timeBuf), "%dm",  e.minutes);
+    else if (e.minutes < 1440) snprintf(timeBuf, sizeof(timeBuf), "%dh",  e.minutes / 60);
+    else                       snprintf(timeBuf, sizeof(timeBuf), "%dd",  e.minutes / 1440);
+    gfx->setTextColor(isUnknown ? COLOR_DIM : COLOR_TEXT);
+    gfx->setCursor(gfx->width() - timeW, y + 1);
+    gfx->print(timeBuf);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fetch + redraw for the current mode
 void refreshDisplay() {
   gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x0010);
   gfx->setTextColor(COLOR_DIM);
@@ -502,6 +576,7 @@ void refreshDisplay() {
   if (currentMode == MODE_DOWN)      ok = paFetchDown();
   if (currentMode == MODE_EVENTS)    ok = paFetchEvents();
   if (currentMode == MODE_MAC)       ok = paFetchMacHistory();
+  if (currentMode == MODE_UPTIME)    ok = paFetchUptime();
 
   if (ok) {
     modeHasData[currentMode] = true;
@@ -513,6 +588,7 @@ void refreshDisplay() {
     if (currentMode == MODE_DOWN)      drawDownDevices();
     if (currentMode == MODE_EVENTS)    drawEvents();
     if (currentMode == MODE_MAC)       drawMacHistory();
+    if (currentMode == MODE_UPTIME)    drawUptimeBars();
   } else if (modeHasData[currentMode]) {
     gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x3000);  // dark red
     char errMsg[52];

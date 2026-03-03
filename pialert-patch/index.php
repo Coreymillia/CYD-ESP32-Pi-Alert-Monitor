@@ -58,6 +58,8 @@ if (isset($_REQUEST['get']) && !empty($_REQUEST['get'])) {
 		break;
 	case 'ip-changes':getIPChanges();
 		break;
+	case 'online-uptime':getOnlineUptime();
+		break;
 	}
 }
 
@@ -313,6 +315,29 @@ function getRecentEvents() {
 		$i++;
 	}
 	echo json_encode($results_array);
+	echo "\n";
+}
+
+// Returns online devices sorted newest-connection-first with server-computed
+// uptime in minutes, so the ESP32 doesn't need its own clock.
+function getOnlineUptime() {
+	global $db;
+	$now = time();
+	$sql = 'SELECT dev_LastIP, dev_Name, dev_LastConnection
+	        FROM Devices WHERE dev_PresentLastScan=1
+	        ORDER BY dev_LastConnection DESC LIMIT 20';
+	$results = $db->query($sql);
+	$out = array();
+	$i = 0;
+	while ($row = $results->fetchArray()) {
+		$conn_time = strtotime($row['dev_LastConnection']);
+		$minutes = ($conn_time > 0) ? (int)floor(($now - $conn_time) / 60) : 0;
+		$out[$i]['dev_LastIP'] = $row['dev_LastIP'];
+		$out[$i]['dev_Name']   = $row['dev_Name'];
+		$out[$i]['minutes']    = $minutes;
+		$i++;
+	}
+	echo json_encode($out);
 	echo "\n";
 }
 

@@ -264,6 +264,59 @@ static bool paFetchMacHistory() {
 }
 
 // ---------------------------------------------------------------------------
+// Uptime Bars (Mode 7) — online devices with server-computed uptime in minutes
+// Sorted newest-connection-first so shortest bar is at top, longest at bottom.
+// ---------------------------------------------------------------------------
+#define PA_MAX_UPTIME 20
+
+struct PaUptimeEntry {
+  char ip[16];
+  char name[32];
+  int  minutes;
+  bool valid;
+};
+
+static PaUptimeEntry pa_uptime[PA_MAX_UPTIME];
+static int           pa_uptime_count = 0;
+
+static bool paFetchUptime() {
+  String payload;
+  int code = paPost("online-uptime", payload);
+  if (code != HTTP_CODE_OK) {
+    if (code != 403) snprintf(pa_last_error, sizeof(pa_last_error),
+                              code == -1 ? "No connection" : "HTTP %d", code);
+    return false;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "JSON error");
+    return false;
+  }
+
+  JsonArray arr = doc.as<JsonArray>();
+  if (arr.isNull()) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "No uptime array");
+    return false;
+  }
+
+  pa_uptime_count = 0;
+  for (JsonObject dev : arr) {
+    if (pa_uptime_count >= PA_MAX_UPTIME) break;
+    PaUptimeEntry &e = pa_uptime[pa_uptime_count++];
+    strncpy(e.ip,   dev["dev_LastIP"] | "", sizeof(e.ip)   - 1);
+    strncpy(e.name, dev["dev_Name"]   | "", sizeof(e.name) - 1);
+    e.minutes = dev["minutes"] | 0;
+    e.ip[sizeof(e.ip)-1]     = '\0';
+    e.name[sizeof(e.name)-1] = '\0';
+    e.valid = true;
+  }
+
+  Serial.printf("[PiAlert] Uptime: %d devices\n", pa_uptime_count);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Returns just the last octet of an IP string ("192.168.0.5" -> "5")
 // ---------------------------------------------------------------------------
 static void paLastOctet(const char *ip, char *buf, size_t bufLen) {
