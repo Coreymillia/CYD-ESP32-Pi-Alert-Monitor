@@ -267,7 +267,7 @@ static bool paFetchMacHistory() {
 // Uptime Bars (Mode 7) — online devices with server-computed uptime in minutes
 // Sorted newest-connection-first so shortest bar is at top, longest at bottom.
 // ---------------------------------------------------------------------------
-#define PA_MAX_UPTIME 20
+#define PA_MAX_UPTIME 40
 
 struct PaUptimeEntry {
   char ip[16];

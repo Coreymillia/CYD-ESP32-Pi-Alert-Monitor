@@ -155,9 +155,8 @@ void drawChrome() {
     gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP");
     gfx->setCursor(186, COLHDR_Y + 1); gfx->print("NAME  /  MAC");
   } else if (currentMode == MODE_UPTIME) {
-    gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP");
-    gfx->setCursor(30,  COLHDR_Y + 1); gfx->print("UPTIME");
-    gfx->setCursor(284, COLHDR_Y + 1); gfx->print("AGO");
+    gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP UPTIME");
+    gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP UPTIME");
   }
   // MODE_DASHBOARD: no column headers
 
@@ -492,18 +491,20 @@ void drawMacHistory() {
 
 
 // ---------------------------------------------------------------------------
-// Mode 7 — Uptime Bars: horizontal bar per online device proportional to how
-// long it has been connected. Shortest bar at top (most recent), longest last.
-// Bar color: green if named, grey if unknown. Time label right-aligned.
+// Mode 7 — Uptime Bars: two columns of 20 rows each (up to 40 devices).
+// Left col = devices 0-19, right col = devices 20-39, shortest bar at top.
+// Bar color: green if named, grey if unknown. Time label right of bar.
 // ---------------------------------------------------------------------------
 void drawUptimeBars() {
-  const int rowH   = 10;   // fits 20 devices in ~210px
-  const int ipW    = 28;   // ".xxx" label width
-  const int timeW  = 30;   // right-side time label ("99d" etc.)
-  const int barX   = ipW + 2;
-  const int barMaxW = gfx->width() - barX - timeW - 2;
+  const int rowH    = 10;
+  const int colW    = gfx->width() / 2;   // 160px each
+  const int ipW     = 26;                  // ".xxx" label
+  const int timeW   = 24;                  // "13d" label
+  const int barX    = ipW + 2;
+  const int barMaxW = colW - barX - timeW - 2;
 
   gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+  gfx->drawFastVLine(colW, ROWS_Y, gfx->height() - ROWS_Y, COLOR_DIM);
 
   if (pa_uptime_count == 0) {
     gfx->setTextColor(COLOR_DIM);
@@ -513,14 +514,18 @@ void drawUptimeBars() {
     return;
   }
 
-  // Find max minutes for proportional scaling
-  int maxMin = 1;
+  // Cap scale at 2 weeks — anything older fills the bar completely
+  int maxMin = 20160;
   for (int i = 0; i < pa_uptime_count; i++) {
-    if (pa_uptime[i].minutes > maxMin) maxMin = pa_uptime[i].minutes;
+    if (pa_uptime[i].minutes > maxMin) pa_uptime[i].minutes = maxMin;
   }
 
   for (int i = 0; i < pa_uptime_count; i++) {
-    int y = ROWS_Y + i * rowH;
+    int col   = i / 20;          // 0 = left, 1 = right
+    int row   = i % 20;          // 0–19
+    int xBase = col * colW;
+    int y     = ROWS_Y + row * rowH;
+
     PaUptimeEntry &e = pa_uptime[i];
 
     bool isUnknown = (e.name[0] == '\0' ||
@@ -535,26 +540,23 @@ void drawUptimeBars() {
     snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
     gfx->setTextColor(COLOR_DIM);
     gfx->setTextSize(1);
-    gfx->setCursor(2, y + 1);
+    gfx->setCursor(xBase + 2, y + 1);
     gfx->print(ipBuf);
 
     // Proportional bar
     int barW = (int)((long)e.minutes * barMaxW / maxMin);
     if (barW < 1 && e.minutes > 0) barW = 1;
-    uint16_t barColor = isUnknown ? 0x2945 : COLOR_ONLINE;  // grey or green
-    if (barW > 0)
-      gfx->fillRect(barX, y + 1, barW, rowH - 2, barColor);
-    // Clear remainder of bar area
-    if (barW < barMaxW)
-      gfx->fillRect(barX + barW, y + 1, barMaxW - barW, rowH - 2, RGB565_BLACK);
+    uint16_t barColor = isUnknown ? 0x2945 : COLOR_ONLINE;
+    gfx->fillRect(xBase + barX, y + 1, barW, rowH - 2, barColor);
+    gfx->fillRect(xBase + barX + barW, y + 1, barMaxW - barW, rowH - 2, RGB565_BLACK);
 
-    // Time label: "XXm", "XXh", or "XXd"
+    // Time label: "Xm", "Xh", or "Xd"
     char timeBuf[6];
     if (e.minutes < 60)        snprintf(timeBuf, sizeof(timeBuf), "%dm",  e.minutes);
     else if (e.minutes < 1440) snprintf(timeBuf, sizeof(timeBuf), "%dh",  e.minutes / 60);
     else                       snprintf(timeBuf, sizeof(timeBuf), "%dd",  e.minutes / 1440);
     gfx->setTextColor(isUnknown ? COLOR_DIM : COLOR_TEXT);
-    gfx->setCursor(gfx->width() - timeW, y + 1);
+    gfx->setCursor(xBase + colW - timeW, y + 1);
     gfx->print(timeBuf);
   }
 }

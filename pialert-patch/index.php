@@ -325,7 +325,7 @@ function getOnlineUptime() {
 	$now = time();
 	$sql = 'SELECT dev_LastIP, dev_Name, dev_LastConnection
 	        FROM Devices WHERE dev_PresentLastScan=1
-	        ORDER BY dev_LastConnection DESC LIMIT 20';
+	        ORDER BY dev_LastConnection DESC LIMIT 40';
 	$results = $db->query($sql);
 	$out = array();
 	$i = 0;
