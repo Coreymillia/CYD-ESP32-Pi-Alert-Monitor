@@ -39,15 +39,18 @@ static int      pa_offline_count = 0;
 // ---------------------------------------------------------------------------
 // New/unknown devices (Mode 3)
 // ---------------------------------------------------------------------------
+#define PA_MAX_NEW 40
+
 struct PaNewDevice {
   char name[32];
   char ip[16];
   char vendor[32];
+  char mac[18];
   char first_seen[20];  // "YYYY-MM-DD HH:MM:SS"
   bool valid;
 };
 
-static PaNewDevice pa_new_devices[PA_MAX_DEVICES];
+static PaNewDevice pa_new_devices[PA_MAX_NEW];
 static int         pa_new_count = 0;
 
 // ---------------------------------------------------------------------------
@@ -473,15 +476,17 @@ static bool paFetchNew() {
 
   pa_new_count = 0;
   for (JsonObject dev : arr) {
-    if (pa_new_count >= PA_MAX_DEVICES) break;
+    if (pa_new_count >= PA_MAX_NEW) break;
     PaNewDevice &d = pa_new_devices[pa_new_count++];
-    strncpy(d.name,       dev["dev_Name"]            | "Unknown", sizeof(d.name)       - 1);
-    strncpy(d.ip,         dev["dev_LastIP"]           | "",        sizeof(d.ip)         - 1);
-    strncpy(d.vendor,     dev["dev_Vendor"]           | "",        sizeof(d.vendor)     - 1);
-    strncpy(d.first_seen, dev["dev_FirstConnection"]  | "",        sizeof(d.first_seen) - 1);
+    strncpy(d.name,       dev["dev_Name"]            | "(unknown)", sizeof(d.name)       - 1);
+    strncpy(d.ip,         dev["dev_LastIP"]           | "",          sizeof(d.ip)         - 1);
+    strncpy(d.vendor,     dev["dev_Vendor"]           | "",          sizeof(d.vendor)     - 1);
+    strncpy(d.mac,        dev["dev_MAC"]              | "",          sizeof(d.mac)        - 1);
+    strncpy(d.first_seen, dev["dev_FirstConnection"]  | "",          sizeof(d.first_seen) - 1);
     d.name[sizeof(d.name)-1]             = '\0';
     d.ip[sizeof(d.ip)-1]                 = '\0';
     d.vendor[sizeof(d.vendor)-1]         = '\0';
+    d.mac[sizeof(d.mac)-1]               = '\0';
     d.first_seen[sizeof(d.first_seen)-1] = '\0';
     d.valid = true;
   }

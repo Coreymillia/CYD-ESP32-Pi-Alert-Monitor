@@ -143,8 +143,9 @@ void drawChrome() {
     gfx->setCursor(186, COLHDR_Y + 1); gfx->print("DEVICE");
   } else if (currentMode == MODE_NEW || currentMode == MODE_DOWN) {
     gfx->setCursor(2,  COLHDR_Y + 1); gfx->print(".IP");
-    gfx->setCursor(26, COLHDR_Y + 1); gfx->print("NAME");
-    gfx->setCursor(176, COLHDR_Y + 1); gfx->print("VENDOR");
+    gfx->setCursor(26, COLHDR_Y + 1); gfx->print("NAME / VENDOR");
+    gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP");
+    gfx->setCursor(186, COLHDR_Y + 1); gfx->print("NAME / VENDOR");
   } else if (currentMode == MODE_EVENTS) {
     gfx->setCursor(2,  COLHDR_Y + 1); gfx->print("TIME");
     gfx->setCursor(38, COLHDR_Y + 1); gfx->print("TYPE");
@@ -267,13 +268,14 @@ void drawDeviceList(PaDevice *devices, int count) {
 }
 
 // ---------------------------------------------------------------------------
-// Mode 3 — New/unknown devices
+// Mode 3 — New/unknown devices: 2 columns, 2-line rows, up to 40 devices.
+// Top line: .IP  Name (red if named, dim if unknown)
+// Bottom line: vendor if known, MAC if not — always dimmed
 // ---------------------------------------------------------------------------
 void drawNewDevices() {
   gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
 
   if (pa_new_count == 0) {
-    // All clear
     gfx->setTextColor(COLOR_ONLINE);
     gfx->setTextSize(1);
     gfx->setCursor(4, ROWS_Y + 7);
@@ -284,53 +286,65 @@ void drawNewDevices() {
     return;
   }
 
-  // Show count banner
-  char banner[32];
-  snprintf(banner, sizeof(banner), "%d NEW DEVICE%s DETECTED",
+  // Count banner
+  char banner[40];
+  snprintf(banner, sizeof(banner), "%d UNACKNOWLEDGED DEVICE%s",
            pa_new_count, pa_new_count == 1 ? "" : "S");
   gfx->setTextColor(COLOR_NEW);
   gfx->setTextSize(1);
-  gfx->setCursor(4, ROWS_Y + 3);
+  gfx->setCursor(4, ROWS_Y + 2);
   gfx->print(banner);
-  gfx->drawFastHLine(0, ROWS_Y + 13, gfx->width(), COLOR_DIM);
+  gfx->drawFastHLine(0, ROWS_Y + 12, gfx->width(), COLOR_DIM);
 
-  // List each new device: .IP  Name  (Vendor, dimmed)
-  const int listY     = ROWS_Y + 16;
-  const int entryH    = 19;
-  const int nameChars = 20;
-  const int vendChars = (gfx->width() - 4) / 6 - 28;  // remaining after IP+name
+  const int colW     = gfx->width() / 2;   // 160px
+  const int rowH     = 21;                  // 2 lines — same as other modes
+  const int listY    = ROWS_Y + 14;
+  const int nameChars = (colW - 26) / 6;   // ~22 chars
+  const int subChars  = (colW - 4)  / 6;   // ~26 chars for vendor/MAC line
 
-  for (int i = 0; i < pa_new_count && i < 10; i++) {
+  gfx->drawFastVLine(colW, ROWS_Y + 12, gfx->height() - ROWS_Y - 12, COLOR_DIM);
+
+  for (int i = 0; i < pa_new_count; i++) {
+    int col   = i / 10;
+    int row   = i % 10;
+    if (col >= 2) break;  // max 20 shown (10 per col)
+    int xBase = col * colW;
+    int y     = listY + row * rowH;
+
+    gfx->fillRect(xBase, y, colW - 1, rowH, RGB565_BLACK);
+
     PaNewDevice &d = pa_new_devices[i];
-    int y = listY + i * entryH;
 
-    gfx->fillRect(0, y, gfx->width(), entryH, RGB565_BLACK);
-
-    // IP
+    // Top line: .IP  Name
     char octet[6];
     paLastOctet(d.ip, octet, sizeof(octet));
     char ipBuf[8];
     snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
     gfx->setTextColor(COLOR_DIM);
     gfx->setTextSize(1);
-    gfx->setCursor(2, y + 6);
+    gfx->setCursor(xBase + 2, y + 2);
     gfx->print(ipBuf);
 
-    // Name
-    char nameBuf[24];
+    bool isUnknown = (d.name[0] == '\0' ||
+                      strcmp(d.name, "Unknown")   == 0 ||
+                      strcmp(d.name, "(unknown)") == 0 ||
+                      strcmp(d.name, "unknown")   == 0);
+    char nameBuf[26];
     truncate(d.name, nameBuf, nameChars);
-    gfx->setTextColor(COLOR_NEW);
-    gfx->setCursor(26, y + 6);
+    gfx->setTextColor(isUnknown ? COLOR_DIM : COLOR_NEW);
+    gfx->setCursor(xBase + 26, y + 2);
     gfx->print(nameBuf);
 
-    // Vendor (dimmed, after name)
-    if (d.vendor[0] != '\0') {
-      char vendBuf[32];
-      truncate(d.vendor, vendBuf, vendChars);
-      gfx->setTextColor(COLOR_DIM);
-      gfx->setCursor(148, y + 6);
-      gfx->print(vendBuf);
-    }
+    // Bottom line: vendor if known (and not "(Unknown)"), else MAC
+    bool hasVendor = (d.vendor[0] != '\0' &&
+                      strcmp(d.vendor, "(Unknown)") != 0 &&
+                      strcmp(d.vendor, "Unknown")   != 0);
+    const char *subLabel = hasVendor ? d.vendor : d.mac;
+    char subBuf[28];
+    truncate(subLabel, subBuf, subChars);
+    gfx->setTextColor(0x4208);  // dark grey
+    gfx->setCursor(xBase + 2, y + 12);
+    gfx->print(subBuf);
   }
 }
 

@@ -264,7 +264,7 @@ function getAllOffline_ICMP() {
 
 function getAllNew() {
 	global $db;
-	$sql = 'SELECT dev_MAC, dev_Name, dev_Vendor, dev_LastIP, dev_FirstConnection FROM Devices WHERE dev_NewDevice="1" ORDER BY dev_FirstConnection DESC LIMIT 20';
+	$sql = 'SELECT dev_MAC, dev_Name, dev_Vendor, dev_LastIP, dev_FirstConnection FROM Devices WHERE dev_NewDevice="1" ORDER BY dev_FirstConnection DESC LIMIT 40';
 	$results = $db->query($sql);
 	$devices = array();
 	$i = 0;
