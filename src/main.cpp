@@ -380,8 +380,8 @@ void drawDownDevices() {
 // Mode 5 — Recent events (connect / disconnect feed)
 // ---------------------------------------------------------------------------
 void drawEvents() {
-  // Row height is tighter here: 14px per row to fit 15 events in ~210px
-  const int evROW_H   = 14;
+  // Row height: 10px per row fits 20 events in ~210px
+  const int evROW_H   = 10;
   const int typeChars = 7;   // "Connect" fits in 42px
   const int nameChars = (gfx->width() - 100) / 6;  // remaining
 
@@ -413,7 +413,7 @@ void drawEvents() {
     }
     gfx->setTextColor(COLOR_DIM);
     gfx->setTextSize(1);
-    gfx->setCursor(2, y + 3);
+    gfx->setCursor(2, y + 1);
     gfx->print(timeBuf);
 
     // Event type (truncated to 7 chars: "Connect", "Disconn", etc.)
@@ -421,14 +421,14 @@ void drawEvents() {
     strncpy(typeBuf, e.type, typeChars);
     typeBuf[typeChars] = '\0';
     gfx->setTextColor(typeColor);
-    gfx->setCursor(38, y + 3);
+    gfx->setCursor(38, y + 1);
     gfx->print(typeBuf);
 
     // Device name
     char nameBuf[52];
     truncate(e.name, nameBuf, nameChars);
     gfx->setTextColor(COLOR_TEXT);
-    gfx->setCursor(100, y + 3);
+    gfx->setCursor(100, y + 1);
     gfx->print(nameBuf);
   }
 }

@@ -153,7 +153,7 @@ static bool paFetchDown() {
 // ---------------------------------------------------------------------------
 // Recent events (Mode 5) — last 15 connect/disconnect events
 // ---------------------------------------------------------------------------
-#define PA_MAX_EVENTS 15
+#define PA_MAX_EVENTS 20
 
 struct PaEvent {
   char name[32];

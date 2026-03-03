@@ -300,7 +300,8 @@ function getRecentEvents() {
 	$sql = 'SELECT e.eve_DateTime, e.eve_EventType, e.eve_IP, d.dev_Name
 	        FROM Events e
 	        LEFT JOIN Devices d ON e.eve_MAC = d.dev_MAC
-	        ORDER BY e.eve_DateTime DESC LIMIT 15';
+	        WHERE e.eve_EventType NOT LIKE "VOIDED%"
+	        ORDER BY e.eve_DateTime DESC LIMIT 20';
 	$results_array = array();
 	$results = $db->query($sql);
 	$i = 0;
