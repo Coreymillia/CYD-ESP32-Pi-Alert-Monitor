@@ -182,7 +182,7 @@ function getStatusofMAC($query_mac) {
 //example curl -k -X POST -F 'api-key=key' -F 'get=all-online' https://url/pialert/api/
 function getAllOnline() {
 	global $db;
-	$sql = 'SELECT * FROM Devices WHERE dev_PresentLastScan="1"';
+	$sql = 'SELECT * FROM Devices WHERE dev_PresentLastScan="1" ORDER BY dev_LastConnection DESC';
 	$api_online_devices = array();
 	$results = $db->query($sql);
 	$i = 0;
