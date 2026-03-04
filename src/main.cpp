@@ -57,7 +57,8 @@ static unsigned long lastTouchTime = 0;
 #define MODE_EVENTS     5
 #define MODE_MAC        6
 #define MODE_UPTIME     7
-#define NUM_MODES       8
+#define MODE_PRESENCE   8
+#define NUM_MODES       9
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
@@ -70,7 +71,8 @@ static const char *modeTitle[] = {
   "Down Devices",
   "Recent Events",
   "IP History",
-  "Uptime"
+  "Uptime",
+  "Presence"
 };
 
 // ---------------------------------------------------------------------------
@@ -149,7 +151,8 @@ void drawChrome() {
   } else if (currentMode == MODE_EVENTS) {
     gfx->setCursor(2,  COLHDR_Y + 1); gfx->print("TIME");
     gfx->setCursor(38, COLHDR_Y + 1); gfx->print("TYPE");
-    gfx->setCursor(100, COLHDR_Y + 1); gfx->print("DEVICE");
+    gfx->setCursor(86, COLHDR_Y + 1); gfx->print(".IP");
+    gfx->setCursor(112, COLHDR_Y + 1); gfx->print("DEVICE");
   } else if (currentMode == MODE_MAC) {
     gfx->setCursor(2,  COLHDR_Y + 1); gfx->print(".IP");
     gfx->setCursor(26, COLHDR_Y + 1); gfx->print("NAME  /  MAC");
@@ -158,6 +161,9 @@ void drawChrome() {
   } else if (currentMode == MODE_UPTIME) {
     gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP UPTIME");
     gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP UPTIME");
+  } else if (currentMode == MODE_PRESENCE) {
+    gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP PRESENCE/30d");
+    gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP PRESENCE/30d");
   }
   // MODE_DASHBOARD: no column headers
 
@@ -402,7 +408,7 @@ void drawEvents() {
   // Row height: 10px per row fits 20 events in ~210px
   const int evROW_H   = 10;
   const int typeChars = 7;   // "Connect" fits in 42px
-  const int nameChars = (gfx->width() - 100) / 6;  // remaining
+  const int nameChars = (gfx->width() - 112) / 6;  // remaining after .IP col
 
   gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
 
@@ -443,11 +449,20 @@ void drawEvents() {
     gfx->setCursor(38, y + 1);
     gfx->print(typeBuf);
 
+    // IP last octet
+    char octet[6];
+    paLastOctet(e.ip, octet, sizeof(octet));
+    char ipBuf[8];
+    snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setCursor(86, y + 1);
+    gfx->print(ipBuf);
+
     // Device name
     char nameBuf[52];
     truncate(e.name, nameBuf, nameChars);
     gfx->setTextColor(COLOR_TEXT);
-    gfx->setCursor(100, y + 1);
+    gfx->setCursor(112, y + 1);
     gfx->print(nameBuf);
   }
 }
@@ -576,6 +591,76 @@ void drawUptimeBars() {
 }
 
 // ---------------------------------------------------------------------------
+// Mode 8 — Presence Bars: days each device was seen in last 30 days.
+// Green bar = seen 20+ days, yellow = 7–19 days, grey = <7 or unknown.
+// Two columns of 20 rows; label shows count of days (max 30).
+// ---------------------------------------------------------------------------
+void drawPresenceBars() {
+  const int rowH    = 10;
+  const int colW    = gfx->width() / 2;   // 160px each
+  const int ipW     = 26;                  // ".xxx" label
+  const int daysW   = 18;                  // "30" label (2 chars)
+  const int barX    = ipW + 2;
+  const int barMaxW = colW - barX - daysW - 2;
+  const int maxDays = 30;
+
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+  gfx->drawFastVLine(colW, ROWS_Y, gfx->height() - ROWS_Y, COLOR_DIM);
+
+  if (pa_presence_count == 0) {
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No device data.");
+    return;
+  }
+
+  for (int i = 0; i < pa_presence_count; i++) {
+    int col   = i / 20;
+    int row   = i % 20;
+    int xBase = col * colW;
+    int y     = ROWS_Y + row * rowH;
+
+    PaPresenceEntry &e = pa_presence[i];
+
+    bool isUnknown = (e.name[0] == '\0' ||
+                      strcmp(e.name, "Unknown")   == 0 ||
+                      strcmp(e.name, "(unknown)") == 0 ||
+                      strcmp(e.name, "unknown")   == 0);
+
+    // IP last octet
+    char octet[6];
+    paLastOctet(e.ip, octet, sizeof(octet));
+    char ipBuf[8];
+    snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(xBase + 2, y + 1);
+    gfx->print(ipBuf);
+
+    // Proportional bar — green if frequent, yellow if occasional, grey if rare
+    int days = e.days > maxDays ? maxDays : e.days;
+    int barW = (days > 0) ? (int)((long)days * barMaxW / maxDays) : 0;
+    if (barW < 1 && days > 0) barW = 1;
+    uint16_t barColor;
+    if      (isUnknown) barColor = 0x2945;          // dark grey
+    else if (days >= 20) barColor = COLOR_ONLINE;   // green
+    else if (days >= 7)  barColor = 0xFFE0;         // yellow
+    else                 barColor = COLOR_DIM;       // grey
+
+    gfx->fillRect(xBase + barX, y + 1, barW, rowH - 2, barColor);
+    gfx->fillRect(xBase + barX + barW, y + 1, barMaxW - barW, rowH - 2, RGB565_BLACK);
+
+    // Day count label
+    char daysBuf[4];
+    snprintf(daysBuf, sizeof(daysBuf), "%d", days);
+    gfx->setTextColor(isUnknown ? COLOR_DIM : COLOR_TEXT);
+    gfx->setCursor(xBase + colW - daysW, y + 1);
+    gfx->print(daysBuf);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fetch + redraw for the current mode
 void refreshDisplay() {
   gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x0010);
@@ -593,6 +678,7 @@ void refreshDisplay() {
   if (currentMode == MODE_EVENTS)    ok = paFetchEvents();
   if (currentMode == MODE_MAC)       ok = paFetchMacHistory();
   if (currentMode == MODE_UPTIME)    ok = paFetchUptime();
+  if (currentMode == MODE_PRESENCE)  ok = paFetchPresence();
 
   if (ok) {
     modeHasData[currentMode] = true;
@@ -605,6 +691,7 @@ void refreshDisplay() {
     if (currentMode == MODE_EVENTS)    drawEvents();
     if (currentMode == MODE_MAC)       drawMacHistory();
     if (currentMode == MODE_UPTIME)    drawUptimeBars();
+    if (currentMode == MODE_PRESENCE)  drawPresenceBars();
   } else if (modeHasData[currentMode]) {
     gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x3000);  // dark red
     char errMsg[52];

@@ -60,6 +60,8 @@ if (isset($_REQUEST['get']) && !empty($_REQUEST['get'])) {
 		break;
 	case 'online-uptime':getOnlineUptime();
 		break;
+	case 'device-presence':getDevicePresence();
+		break;
 	}
 }
 
@@ -361,6 +363,31 @@ function getIPChanges() {
 		$out[$i]['dev_Name']  = $row['dev_Name'];
 		$out[$i]['eve_IP']    = $row['eve_IP'];
 		$out[$i]['last_seen'] = $row['last_seen'];
+		$i++;
+	}
+	echo json_encode($out);
+	echo "\n";
+}
+// Returns each non-archived device with a count of how many distinct days
+// in the last 30 days it appeared in any event.  Sorted most-present first.
+function getDevicePresence() {
+	global $db;
+	$sql = "SELECT d.dev_Name, d.dev_LastIP,
+	               COUNT(DISTINCT DATE(e.eve_DateTime)) as days_seen
+	        FROM Devices d
+	        LEFT JOIN Events e ON d.dev_MAC = e.eve_MAC
+	          AND e.eve_DateTime > datetime('now', '-30 days')
+	        WHERE d.dev_Archived = 0
+	        GROUP BY d.dev_MAC
+	        ORDER BY days_seen DESC, d.dev_Name ASC
+	        LIMIT 40";
+	$results = $db->query($sql);
+	$out = array();
+	$i = 0;
+	while ($row = $results->fetchArray()) {
+		$out[$i]['dev_Name']   = $row['dev_Name'];
+		$out[$i]['dev_LastIP'] = $row['dev_LastIP'];
+		$out[$i]['days_seen']  = (int)$row['days_seen'];
 		$i++;
 	}
 	echo json_encode($out);

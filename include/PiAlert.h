@@ -320,6 +320,58 @@ static bool paFetchUptime() {
 }
 
 // ---------------------------------------------------------------------------
+// Device Presence (Mode 8) — days each device was seen in the last 30 days
+// ---------------------------------------------------------------------------
+#define PA_MAX_PRESENCE 40
+
+struct PaPresenceEntry {
+  char ip[16];
+  char name[32];
+  int  days;   // distinct days seen in last 30
+  bool valid;
+};
+
+static PaPresenceEntry pa_presence[PA_MAX_PRESENCE];
+static int             pa_presence_count = 0;
+
+static bool paFetchPresence() {
+  String payload;
+  int code = paPost("device-presence", payload);
+  if (code != HTTP_CODE_OK) {
+    if (code != 403) snprintf(pa_last_error, sizeof(pa_last_error),
+                              code == -1 ? "No connection" : "HTTP %d", code);
+    return false;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "JSON error");
+    return false;
+  }
+
+  JsonArray arr = doc.as<JsonArray>();
+  if (arr.isNull()) {
+    snprintf(pa_last_error, sizeof(pa_last_error), "No presence array");
+    return false;
+  }
+
+  pa_presence_count = 0;
+  for (JsonObject dev : arr) {
+    if (pa_presence_count >= PA_MAX_PRESENCE) break;
+    PaPresenceEntry &e = pa_presence[pa_presence_count++];
+    strncpy(e.ip,   dev["dev_LastIP"] | "", sizeof(e.ip)   - 1);
+    strncpy(e.name, dev["dev_Name"]   | "", sizeof(e.name) - 1);
+    e.days = dev["days_seen"] | 0;
+    e.ip[sizeof(e.ip)-1]     = '\0';
+    e.name[sizeof(e.name)-1] = '\0';
+    e.valid = true;
+  }
+
+  Serial.printf("[PiAlert] Presence: %d devices\n", pa_presence_count);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Returns just the last octet of an IP string ("192.168.0.5" -> "5")
 // ---------------------------------------------------------------------------
 static void paLastOctet(const char *ip, char *buf, size_t bufLen) {
