@@ -19,9 +19,12 @@ Alert types:
   mac_change           — any other device changed its MAC for a known IP
 
 Status thresholds:
-  anomaly  — gateway MAC changed OR current ≠ expected OR rate > ANOMALY_RATE
-  warning  — rate > WARN_RATE OR any duplicate_arp_count > 0
+  anomaly  — gateway MAC changed OR current ≠ expected OR rate > ANOMALY_RATE (2000 pkt/min)
+  warning  — rate > WARN_RATE (500 pkt/min) OR any duplicate_arp_count > 0
   ok       — everything else
+
+Note: Pi.Alert's own ARP scanner generates significant traffic (~50-200 pkt/min bursts).
+      Thresholds are set well above that to avoid false positives.
 
 Usage:
   sudo python3 arpwatch_daemon.py [--iface eth0] [--gateway 192.168.0.1]
@@ -57,8 +60,8 @@ MAX_TALKERS     = 5     # top talkers shown
 RATE_WINDOW_S   = 60    # rolling window for ARP rate (seconds = packets/min)
 SPOOF_WINDOW_S  = 120   # back-and-forth MAC flip within this window → arp_spoof
 TALKER_PRUNE    = 200   # prune talker dict when it exceeds this key count
-WARN_RATE       = 20    # pkt/min → warning
-ANOMALY_RATE    = 100   # pkt/min → anomaly
+WARN_RATE       = 500   # pkt/min → warning  (Pi.Alert's own scanner easily hits 100+)
+ANOMALY_RATE    = 2000  # pkt/min → anomaly  (real ARP flood is much higher than normal scan)
 WRITE_INTERVAL  = 5     # seconds between background status writes
 
 # ---------------------------------------------------------------------------
