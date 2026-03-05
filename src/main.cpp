@@ -45,6 +45,15 @@ static unsigned long lastTouchTime = 0;
 
 #include "Portal.h"
 #include "PiAlert.h"
+#include "ArpWatch.h"
+#include "ArpStatus.h"
+
+// ---------------------------------------------------------------------------
+// Device identity — reported via GET /identify on port 80
+// ---------------------------------------------------------------------------
+#define DEVICE_NAME      "CYDPiAlert"
+#define FIRMWARE_VERSION "1.0.0"
+#include "CYDIdentity.h"
 
 // ---------------------------------------------------------------------------
 // Display modes
@@ -58,7 +67,10 @@ static unsigned long lastTouchTime = 0;
 #define MODE_MAC        6
 #define MODE_UPTIME     7
 #define MODE_PRESENCE   8
-#define NUM_MODES       9
+#define MODE_ESP        9
+#define MODE_ARP        10
+#define MODE_ARP_STATUS 11
+#define NUM_MODES       12
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
@@ -72,7 +84,10 @@ static const char *modeTitle[] = {
   "Recent Events",
   "IP History",
   "Uptime",
-  "Presence"
+  "Presence",
+  "ESP Devices",
+  "ARP Watch",
+  "ARP Status"
 };
 
 // ---------------------------------------------------------------------------
@@ -164,6 +179,32 @@ void drawChrome() {
   } else if (currentMode == MODE_PRESENCE) {
     gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP PRESENCE/30d");
     gfx->setCursor(162, COLHDR_Y + 1); gfx->print(".IP PRESENCE/30d");
+  } else if (currentMode == MODE_ESP) {
+    gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP");
+    gfx->setCursor(30,  COLHDR_Y + 1); gfx->print("NAME");
+    gfx->setCursor(136, COLHDR_Y + 1); gfx->print("VER");
+    gfx->setCursor(184, COLHDR_Y + 1); gfx->print("RSSI");
+    gfx->setCursor(232, COLHDR_Y + 1); gfx->print("UP");
+  } else if (currentMode == MODE_ARP) {
+    gfx->setCursor(2,   COLHDR_Y + 1); gfx->print("TYPE");
+    gfx->setCursor(72,  COLHDR_Y + 1); gfx->print("IP");
+    gfx->setCursor(210, COLHDR_Y + 1); gfx->print("TIME");
+  } else if (currentMode == MODE_ARP_STATUS) {
+    // Show live gateway + rate + status in the sub-header bar
+    if (arp_status_data.valid) {
+      gfx->setCursor(2, COLHDR_Y + 1);
+      gfx->print(arp_status_data.gateway_ip[0] ? arp_status_data.gateway_ip : "GW?");
+      char rateBuf[10];
+      snprintf(rateBuf, sizeof(rateBuf), "  %.1f/m", arp_status_data.arp_rate);
+      gfx->print(rateBuf);
+      uint16_t sc = (strcmp(arp_status_data.status, "anomaly") == 0) ? COLOR_NEW  :
+                    (strcmp(arp_status_data.status, "warning") == 0) ? 0xFFE0 : COLOR_ONLINE;
+      gfx->setTextColor(sc);
+      gfx->setCursor(246, COLHDR_Y + 1);
+      gfx->print(arp_status_data.status);
+    } else {
+      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("ARP STATUS");
+    }
   }
   // MODE_DASHBOARD: no column headers
 
@@ -661,8 +702,328 @@ void drawPresenceBars() {
 }
 
 // ---------------------------------------------------------------------------
+// Mode 9 — CYD Devices: lists all ESP32 CYD devices that responded to /identify.
+// Each row: IP | NAME | VER | RSSI | UPTIME
+// Green name = healthy (errors==0), red = has error flags set.
+// ---------------------------------------------------------------------------
+void drawCydDevices() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (pa_cyd_count == 0) {
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No ESP devices found.");
+    gfx->setCursor(4, ROWS_Y + 20);
+    gfx->print("(probing all known IPs for /identify)");
+    return;
+  }
+
+  const int rowH = 18;
+
+  for (int i = 0; i < pa_cyd_count; i++) {
+    PaCydDevice &c = pa_cyd[i];
+    int y = ROWS_Y + i * rowH;
+
+    // IP last octet
+    char octet[6];
+    paLastOctet(c.ip, octet, sizeof(octet));
+    char ipBuf[8];
+    snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(2, y + 2);
+    gfx->print(ipBuf);
+
+    // Name — yellow if stale (missed last scan), red if errors, green if fresh
+    gfx->setTextColor(pa_cyd_stale ? 0xFFE0 : (c.errors ? COLOR_NEW : COLOR_ONLINE));
+    gfx->setCursor(30, y + 2);
+    char nameBuf[18];
+    truncate(c.name, nameBuf, 17);
+    gfx->print(nameBuf);
+
+    // Version
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setCursor(136, y + 2);
+    char verBuf[8];
+    truncate(c.version, verBuf, 7);
+    gfx->print(verBuf);
+
+    // RSSI (e.g. "-65")
+    char rssiBuf[6];
+    snprintf(rssiBuf, sizeof(rssiBuf), "%d", c.rssi);
+    gfx->setTextColor(c.rssi > -70 ? COLOR_ONLINE : COLOR_DIM);
+    gfx->setCursor(184, y + 2);
+    gfx->print(rssiBuf);
+
+    // Uptime label
+    char upBuf[8];
+    unsigned long s = c.uptime_s;
+    if      (s < 60)        snprintf(upBuf, sizeof(upBuf), "%lus",  s);
+    else if (s < 3600)      snprintf(upBuf, sizeof(upBuf), "%lum",  s / 60);
+    else if (s < 86400)     snprintf(upBuf, sizeof(upBuf), "%luh",  s / 3600);
+    else                    snprintf(upBuf, sizeof(upBuf), "%lud",  s / 86400);
+    gfx->setTextColor(COLOR_TEXT);
+    gfx->setCursor(232, y + 2);
+    gfx->print(upBuf);
+
+    // Divider line
+    if (i < pa_cyd_count - 1)
+      gfx->drawFastHLine(0, y + rowH - 1, gfx->width(), 0x1082);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode 10 — ARP Watch: anomalies detected by arpwatch_daemon.py on the Pi.
+// Each row (21px): line 1 = [TYPE] [IP] [HH:MM], line 2 = old_mac > new_mac
+// Colour: GATEWAY_MAC/ARP_SPOOF = red, MAC_CHANGE = yellow, clean = green.
+// ---------------------------------------------------------------------------
+#define COLOR_SPOOF 0xFC00   // orange — ARP_SPOOF
+
+void drawArpAlerts() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (arp_alert_count == 0) {
+    gfx->setTextColor(COLOR_ONLINE);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No ARP anomalies detected.");
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setCursor(4, ROWS_Y + 20);
+    gfx->print("Network looks clean!");
+    return;
+  }
+
+  for (int i = 0; i < arp_alert_count; i++) {
+    ArpAlert &a = arp_alerts[i];
+    int y = ROWS_Y + i * ROW_H;
+
+    // Alert type colour
+    uint16_t typeColor;
+    if      (strncmp(a.type, "GATEWAY_MAC", 11) == 0) typeColor = COLOR_NEW;
+    else if (strncmp(a.type, "ARP_SPOOF",    9) == 0) typeColor = COLOR_SPOOF;
+    else                                               typeColor = 0xFFE0;  // yellow
+
+    // Line 1: TYPE (left) + IP (mid) + HH:MM (right)
+    gfx->setTextSize(1);
+    gfx->setTextColor(typeColor);
+    gfx->setCursor(2, y + 2);
+    gfx->print(a.type);
+
+    gfx->setTextColor(COLOR_TEXT);
+    gfx->setCursor(72, y + 2);
+    gfx->print(a.ip);
+
+    // Time: extract HH:MM from "YYYY-MM-DD HH:MM:SS"
+    char timeBuf[6] = "";
+    if (strlen(a.time) >= 16) {
+      strncpy(timeBuf, a.time + 11, 5);
+      timeBuf[5] = '\0';
+    }
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setCursor(210, y + 2);
+    gfx->print(timeBuf);
+
+    // Line 2: old_mac > new_mac (dimmed; 17+3+17 = 37 chars = 222px — fits)
+    gfx->setTextColor(0x4208);  // dark grey
+    gfx->setCursor(2, y + 12);
+    char macLine[40];
+    snprintf(macLine, sizeof(macLine), "%s>%s", a.old_mac, a.new_mac);
+    gfx->print(macLine);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode 11 — ARP Status Dashboard
+// Full-width layout (320×212 content area):
+//   Status banner (18px)  — colored bg, status text + current gateway MAC
+//   Detail rows (11px ea) — CUR/EXP MAC, GW IP+changes+dupes, rate, anomaly
+//   Divider → Top Talkers (3 rows with mini bars)
+//   Divider → Last Events (5 rows: IP · MAC · req/rep · HH:MM:SS)
+// ---------------------------------------------------------------------------
+#define COLOR_WARN   0xFFE0   // yellow
+#define COLOR_SPOOF2 0xFC00   // orange
+
+void drawArpStatus() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (!arp_status_data.valid) {
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No ARP status data.");
+    gfx->setCursor(4, ROWS_Y + 20);
+    gfx->print("Is arpwatch_daemon.py running?");
+    return;
+  }
+
+  // ── Status banner ────────────────────────────────────────────────────────
+  uint16_t sBg, sFg;
+  const char *sLabel;
+  if      (strcmp(arp_status_data.status, "anomaly") == 0) { sBg=0x8000; sFg=COLOR_NEW;   sLabel="!! ANOMALY !!"; }
+  else if (strcmp(arp_status_data.status, "warning") == 0) { sBg=0x8420; sFg=COLOR_WARN;  sLabel="! WARNING";    }
+  else                                                      { sBg=0x0280; sFg=COLOR_ONLINE; sLabel="OK";          }
+
+  gfx->fillRect(0, ROWS_Y, gfx->width(), 18, sBg);
+  gfx->setTextColor(sFg);
+  gfx->setTextSize(1);
+  gfx->setCursor(4, ROWS_Y + 5);
+  gfx->print(sLabel);
+
+  // Current gateway MAC right-justified on the banner
+  const char *curMac = arp_status_data.gateway_mac_cur[0]
+                       ? arp_status_data.gateway_mac_cur : "learning...";
+  gfx->setCursor(320 - (int)strlen(curMac) * 6 - 2, ROWS_Y + 5);
+  gfx->print(curMac);
+
+  // ── Detail rows ──────────────────────────────────────────────────────────
+  int y = ROWS_Y + 21;  // just below the banner
+
+  // CUR: current gateway MAC (truth)
+  gfx->setTextColor(COLOR_DIM);  gfx->setTextSize(1);
+  gfx->setCursor(2, y);   gfx->print("CUR");
+  gfx->setTextColor(COLOR_TEXT);
+  gfx->setCursor(24, y);  gfx->print(curMac);
+  y += 11;
+
+  // EXP: expected MAC + MATCH/DIFF indicator
+  const char *expMac = arp_status_data.gateway_mac_exp[0]
+                       ? arp_status_data.gateway_mac_exp : "unknown";
+  bool macMatch = (arp_status_data.gateway_mac_exp[0] != '\0' &&
+                   strcmp(arp_status_data.gateway_mac_cur, arp_status_data.gateway_mac_exp) == 0);
+  gfx->setTextColor(COLOR_DIM);
+  gfx->setCursor(2, y);   gfx->print("EXP");
+  gfx->setTextColor(COLOR_TEXT);
+  gfx->setCursor(24, y);  gfx->print(expMac);
+  gfx->setTextColor(macMatch ? COLOR_ONLINE : COLOR_NEW);
+  gfx->setCursor(260, y); gfx->print(macMatch ? "MATCH" : "DIFF!");
+  y += 11;
+
+  // GW IP + change count + dupe count
+  gfx->setTextColor(COLOR_DIM);  gfx->setCursor(2, y);   gfx->print("GW");
+  gfx->setTextColor(COLOR_TEXT); gfx->setCursor(16, y);  gfx->print(arp_status_data.gateway_ip);
+  gfx->setTextColor(COLOR_DIM);  gfx->setCursor(110, y); gfx->print("chg:");
+  gfx->setTextColor(arp_status_data.gw_mac_changes > 0 ? COLOR_NEW : COLOR_ONLINE);
+  char chgBuf[4]; snprintf(chgBuf, sizeof(chgBuf), "%d", arp_status_data.gw_mac_changes);
+  gfx->setCursor(140, y); gfx->print(chgBuf);
+  gfx->setTextColor(COLOR_DIM);  gfx->setCursor(168, y); gfx->print("dup:");
+  gfx->setTextColor(arp_status_data.duplicate_count > 0 ? COLOR_WARN : COLOR_ONLINE);
+  char dupBuf[6]; snprintf(dupBuf, sizeof(dupBuf), "%d", arp_status_data.duplicate_count);
+  gfx->setCursor(198, y); gfx->print(dupBuf);
+  y += 11;
+
+  // ARP rate + last ARP timestamp
+  char rateBuf[12]; snprintf(rateBuf, sizeof(rateBuf), "%.1f/m", arp_status_data.arp_rate);
+  gfx->setTextColor(COLOR_DIM);  gfx->setCursor(2, y);   gfx->print("rate:");
+  gfx->setTextColor(arp_status_data.arp_rate > ANOMALY_RATE ? COLOR_NEW :
+                    arp_status_data.arp_rate > WARN_RATE     ? COLOR_WARN : COLOR_ONLINE);
+  gfx->setCursor(36, y);  gfx->print(rateBuf);
+  gfx->setTextColor(COLOR_DIM);  gfx->setCursor(100, y); gfx->print("last:");
+  char arpTs[9] = "--:--:--";
+  if (strlen(arp_status_data.last_arp_ts) >= 19) {
+    strncpy(arpTs, arp_status_data.last_arp_ts + 11, 8); arpTs[8] = '\0';
+  }
+  gfx->setTextColor(COLOR_TEXT); gfx->setCursor(136, y); gfx->print(arpTs);
+  y += 11;
+
+  // Last anomaly type + time
+  bool hasAnomaly = (strcmp(arp_status_data.last_anomaly, "none") != 0 &&
+                     arp_status_data.last_anomaly[0] != '\0');
+  gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("evt:");
+  gfx->setTextColor(hasAnomaly ? COLOR_NEW : COLOR_ONLINE);
+  char anomBuf[22]; strncpy(anomBuf, arp_status_data.last_anomaly, 21); anomBuf[21] = '\0';
+  gfx->setCursor(30, y); gfx->print(anomBuf);
+  if (hasAnomaly && strlen(arp_status_data.last_anomaly_ts) >= 16) {
+    char anomTs[6]; strncpy(anomTs, arp_status_data.last_anomaly_ts + 11, 5); anomTs[5] = '\0';
+    gfx->setTextColor(COLOR_DIM); gfx->setCursor(272, y); gfx->print(anomTs);
+  }
+  y += 11;
+
+  // ── Top Talkers ──────────────────────────────────────────────────────────
+  gfx->drawFastHLine(0, y, gfx->width(), COLOR_DIM); y += 3;
+  gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("TOP TALKERS");
+  y += 9;
+
+  const int ipColW  = 28;
+  const int cntColW = 24;
+  const int barMaxW = gfx->width() - ipColW - cntColW - 4;
+  int maxCount = 1;
+  for (int i = 0; i < arp_talker_count; i++)
+    if (arp_talkers[i].count > maxCount) maxCount = arp_talkers[i].count;
+
+  int n = arp_talker_count < 3 ? arp_talker_count : 3;
+  if (n == 0) {
+    gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("no data yet"); y += 10;
+  }
+  for (int i = 0; i < n; i++) {
+    char octet[6]; paLastOctet(arp_talkers[i].ip, octet, sizeof(octet));
+    char ipBuf[8]; snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(2, y); gfx->print(ipBuf);
+
+    int barW = (int)((long)arp_talkers[i].count * barMaxW / maxCount);
+    if (barW < 1 && arp_talkers[i].count > 0) barW = 1;
+    gfx->fillRect(ipColW + 2, y, barW,          8, 0x2945);
+    gfx->fillRect(ipColW + 2 + barW, y, barMaxW - barW, 8, RGB565_BLACK);
+
+    char cntBuf[8]; snprintf(cntBuf, sizeof(cntBuf), "%d", arp_talkers[i].count);
+    gfx->setTextColor(COLOR_TEXT);
+    gfx->setCursor(gfx->width() - cntColW, y); gfx->print(cntBuf);
+    y += 10;
+  }
+
+  // ── Last Events ──────────────────────────────────────────────────────────
+  gfx->drawFastHLine(0, y, gfx->width(), COLOR_DIM); y += 3;
+  gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("LAST EVENTS");
+  y += 9;
+
+  if (arp_last_event_count == 0) {
+    gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("no events yet");
+    return;
+  }
+
+  for (int i = 0; i < arp_last_event_count; i++) {
+    if (y > gfx->height() - 9) break;
+    ArpLastEvent &e = arp_last_events[i];
+
+    // .IP
+    char octet[6]; paLastOctet(e.ip, octet, sizeof(octet));
+    char ipBuf[8]; snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print(ipBuf);
+
+    // MAC (full 17 chars)
+    gfx->setTextColor(0x4208); gfx->setCursor(32, y); gfx->print(e.mac);
+
+    // type: "rep" (green) or "req" (yellow)
+    bool isReply = (strncmp(e.type, "reply", 5) == 0);
+    gfx->setTextColor(isReply ? COLOR_ONLINE : COLOR_WARN);
+    gfx->setCursor(136, y); gfx->print(isReply ? "rep" : "req");
+
+    // HH:MM:SS
+    gfx->setTextColor(COLOR_DIM); gfx->setCursor(162, y); gfx->print(e.ts);
+    y += 9;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fetch + redraw for the current mode
 void refreshDisplay() {
+  // ESP Devices scan is slow — update only the header bar so the previous results
+  // stay visible on screen instead of going blank for the entire scan duration.
+  if (currentMode == MODE_ESP) {
+    // Show "Scanning..." in the top chrome bar only; body keeps last results
+    gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x0010);
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, 3);
+    gfx->print("Scanning...");
+    bool ok = paFetchCydDevices();
+    modeHasData[currentMode] = true;
+    drawChrome();
+    drawCydDevices();
+    return;
+  }
+
   gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x0010);
   gfx->setTextColor(COLOR_DIM);
   gfx->setTextSize(1);
@@ -679,6 +1040,8 @@ void refreshDisplay() {
   if (currentMode == MODE_MAC)       ok = paFetchMacHistory();
   if (currentMode == MODE_UPTIME)    ok = paFetchUptime();
   if (currentMode == MODE_PRESENCE)  ok = paFetchPresence();
+  if (currentMode == MODE_ARP)        ok = paFetchArpAlerts();
+  if (currentMode == MODE_ARP_STATUS) ok = paFetchArpStatus();
 
   if (ok) {
     modeHasData[currentMode] = true;
@@ -692,6 +1055,8 @@ void refreshDisplay() {
     if (currentMode == MODE_MAC)       drawMacHistory();
     if (currentMode == MODE_UPTIME)    drawUptimeBars();
     if (currentMode == MODE_PRESENCE)  drawPresenceBars();
+    if (currentMode == MODE_ARP)        drawArpAlerts();
+    if (currentMode == MODE_ARP_STATUS) drawArpStatus();
   } else if (modeHasData[currentMode]) {
     gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x3000);  // dark red
     char errMsg[52];
@@ -802,6 +1167,8 @@ void setup() {
   showStatus("WiFi connected!");
   delay(400);
 
+  identityBegin();
+
   drawChrome();
   refreshDisplay();
 }
@@ -845,4 +1212,5 @@ void loop() {
   gfx->drawFastHLine(barW, gfx->height() - 1, gfx->width() - barW, RGB565_BLACK);
 
   delay(20);
+  identityHandle();
 }

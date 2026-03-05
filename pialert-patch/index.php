@@ -62,7 +62,18 @@ if (isset($_REQUEST['get']) && !empty($_REQUEST['get'])) {
 		break;
 	case 'device-presence':getDevicePresence();
 		break;
+	case 'all-device-ips':getAllDeviceIPs();
+		break;
+	case 'arp-alerts':getArpAlerts();
+		break;
+	case 'arp-status':getArpStatus();
+		break;
 	}
+}
+
+// set-device-name: POST api-key + mac + name  →  updates dev_Name in Devices table
+if (isset($_REQUEST['set']) && $_REQUEST['set'] === 'device-name') {
+	setDeviceName();
 }
 
 //example curl -k -X POST -F 'api-key=key' -F 'get=system-status' https://url/pialert/api/
@@ -391,6 +402,102 @@ function getDevicePresence() {
 		$i++;
 	}
 	echo json_encode($out);
+	echo "\n";
+}
+
+// Updates the friendly name for a device given its MAC address.
+// POST params: api-key, set=device-name, mac=<mac>, name=<name>
+// Skips update if the device already has a non-Unknown name (won't overwrite human labels).
+function setDeviceName() {
+	global $db;
+	$mac  = isset($_REQUEST['mac'])  ? strtolower(trim($_REQUEST['mac']))  : '';
+	$name = isset($_REQUEST['name']) ? trim($_REQUEST['name'])              : '';
+	if (!filter_var($mac, FILTER_VALIDATE_MAC) || $name === '') {
+		echo json_encode(['ok' => false, 'error' => 'Invalid mac or name']);
+		return;
+	}
+	$mac = str_replace('-', ':', $mac);
+	// Only rename if currently unnamed / unknown (preserve manual labels)
+	$check = $db->query("SELECT dev_Name FROM Devices WHERE dev_MAC='" . SQLite3::escapeString($mac) . "'");
+	$row = $check ? $check->fetchArray(SQLITE3_ASSOC) : null;
+	if (!$row) {
+		echo json_encode(['ok' => false, 'error' => 'Device not found']);
+		return;
+	}
+	$existing = trim($row['dev_Name'] ?? '');
+	if ($existing !== '' && strtolower($existing) !== 'unknown' && $existing !== '(unknown)') {
+		echo json_encode(['ok' => true, 'skipped' => true, 'reason' => 'already named', 'name' => $existing]);
+		return;
+	}
+	$safeName = SQLite3::escapeString($name);
+	$db->exec("UPDATE Devices SET dev_Name='" . $safeName . "' WHERE dev_MAC='" . SQLite3::escapeString($mac) . "'");
+	echo json_encode(['ok' => true, 'mac' => $mac, 'name' => $name]);
+	echo "\n";
+}
+
+// Returns last known IP + MAC + name for all non-archived devices.
+// Used by the ESP scanner to probe every known device, not just online ones
+// (ESP32s don't respond to ping so Pi.Alert often marks them offline incorrectly).
+function getAllDeviceIPs() {
+	global $db;
+	$sql = "SELECT dev_MAC, dev_Name, dev_LastIP FROM Devices
+	        WHERE dev_Archived = 0 AND dev_LastIP != '' AND dev_LastIP IS NOT NULL
+	        ORDER BY dev_LastConnection DESC";
+	$results = $db->query($sql);
+	$out = array();
+	$i = 0;
+	while ($row = $results->fetchArray()) {
+		$out[$i]['dev_MAC']    = $row['dev_MAC'];
+		$out[$i]['dev_Name']   = $row['dev_Name'];
+		$out[$i]['dev_LastIP'] = $row['dev_LastIP'];
+		$i++;
+	}
+	echo json_encode($out);
+	echo "\n";
+}
+
+// Returns the 10 most recent ARP anomalies written by arpwatch_daemon.py.
+// Reads alerts[] from arp_status.json (v2 daemon) or arp_alerts.json (v1).
+function getArpAlerts() {
+	$status_file = '/tmp/arp_status.json';
+	$alerts_file = '/tmp/arp_alerts.json';
+	// Prefer the v2 rich file; fall back to legacy v1 file
+	$src = file_exists($status_file) ? $status_file : $alerts_file;
+	if (!$src || !file_exists($src)) {
+		echo json_encode([]);
+		echo "\n";
+		return;
+	}
+	$raw = file_get_contents($src);
+	if ($raw === false) { echo json_encode([]); echo "\n"; return; }
+	$data = json_decode($raw, true);
+	// v2 file is an object with an "alerts" key; v1 file is a bare array
+	if (isset($data['alerts'])) {
+		echo json_encode($data['alerts']);
+	} else {
+		echo $raw;   // v1 bare array — return as-is
+	}
+	echo "\n";
+}
+
+// Returns the full ARP status object written by arpwatch_daemon.py v2.
+// Fields: gateway_ip, gateway_mac_current, gateway_mac_expected, status,
+//         last_arp_ts, arp_rate, duplicate_arp_count, gateway_mac_changes,
+//         last_anomaly, last_anomaly_ts, top_talkers, last_events, alerts, iface
+function getArpStatus() {
+	$status_file = '/tmp/arp_status.json';
+	if (!file_exists($status_file)) {
+		echo json_encode(['status' => 'unavailable', 'error' => 'daemon not running']);
+		echo "\n";
+		return;
+	}
+	$json = file_get_contents($status_file);
+	if ($json === false) {
+		echo json_encode(['status' => 'unavailable', 'error' => 'read error']);
+		echo "\n";
+		return;
+	}
+	echo $json;
 	echo "\n";
 }
 ?>
