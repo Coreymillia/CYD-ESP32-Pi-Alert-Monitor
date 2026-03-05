@@ -68,6 +68,10 @@ if (isset($_REQUEST['get']) && !empty($_REQUEST['get'])) {
 		break;
 	case 'arp-status':getArpStatus();
 		break;
+	case 'wifi-status':getWifiStatus();
+		break;
+	case 'wifi-detail':getWifiDetail();
+		break;
 	}
 }
 
@@ -498,6 +502,31 @@ function getArpStatus() {
 		return;
 	}
 	echo $json;
+	echo "\n";
+}
+// Returns the Wi-Fi RF monitor status written by wifi_monitor_daemon.py.
+function getWifiStatus() {
+	$f = '/tmp/wifi_status.json';
+	if (!file_exists($f)) {
+		echo json_encode(['status' => 'unavailable', 'error' => 'daemon not running']);
+		echo "\n";
+		return;
+	}
+	$json = file_get_contents($f);
+	echo ($json !== false) ? $json : json_encode(['error' => 'read error']);
+	echo "\n";
+}
+
+// Returns the Wi-Fi RF monitor detail written by wifi_monitor_daemon.py.
+function getWifiDetail() {
+	$f = '/tmp/wifi_detail.json';
+	if (!file_exists($f)) {
+		echo json_encode(['status' => 'unavailable', 'error' => 'daemon not running']);
+		echo "\n";
+		return;
+	}
+	$json = file_get_contents($f);
+	echo ($json !== false) ? $json : json_encode(['error' => 'read error']);
 	echo "\n";
 }
 ?>

@@ -24,6 +24,8 @@ Fetches live network data from your local [Pi.Alert](https://github.com/pucherot
 | **9** | **ESP Devices** | All CYD ESP32 devices on your network that respond to `/identify` — IP, name, version, RSSI, uptime |
 | **10** | **ARP Watch** | ARP anomalies detected by `arpwatch_daemon.py` — GATEWAY_MAC / ARP_SPOOF / MAC_CHANGE |
 | **11** | **ARP Status** | Full ARP health dashboard — gateway MAC match, rate, top talkers, last events |
+| **12** | **WiFi Status** | RF-layer summary — status banner (ok/warning/anomaly), deauth count + last timestamp, rogue AP count, probe rate, known AP count, hidden SSIDs, auto-learn countdown |
+| **13** | **WiFi Detail** | Full RF detail — rogue AP list (BSSID/channel/RSSI/SSID), channel activity bar chart (ch 1–13), last deauth event with src→dst MAC, top BSSIDs with frame counts |
 
 ---
 
@@ -154,6 +156,8 @@ Most modes require custom API endpoints added to Pi.Alert's `index.php`. Modes 1
 | 9 — ESP Devices | `all-device-ips` | **Yes — patch index.php** |
 | 10 — ARP Watch | `arp-alerts` | **Yes — patch index.php + arpwatch_daemon.py** |
 | 11 — ARP Status | `arp-status` | **Yes — patch index.php + arpwatch_daemon.py** |
+| 12 — WiFi Status | *(file-based)* | **Yes — patch index.php + wifi_monitor_daemon.py** |
+| 13 — WiFi Detail | *(file-based)* | **Yes — patch index.php + wifi_monitor_daemon.py** |
 
 > 💡 If you only want basic network monitoring, Modes 0–2 work with a stock Pi.Alert install. Use the [Mode Manager](#mode-manager-toggle-modes-onoff) to disable everything else.
 
@@ -253,6 +257,65 @@ The daemon and setup instructions are maintained separately. Without it running,
 
 ---
 
+### WiFi Monitor (Modes 12 & 13) — Additional Setup
+
+Modes 12 and 13 require `wifi_monitor_daemon.py` running on the Pi. This daemon passively sniffs 802.11 management frames, tracks deauth events, detects rogue APs, monitors probe request rates, and maps channel activity. It writes JSON files to `/tmp/` that Pi.Alert's patched `index.php` serves to the CYD.
+
+The daemon script is included in this repo at [`pialert-patch/wifi_monitor_daemon.py`](pialert-patch/wifi_monitor_daemon.py).
+
+#### Step 1 — Install dependency
+
+```bash
+sudo pip3 install scapy
+```
+
+#### Step 2 — Copy the daemon to the Pi
+
+```bash
+sudo cp pialert-patch/wifi_monitor_daemon.py /home/pi/wifi_monitor_daemon.py
+chmod +x /home/pi/wifi_monitor_daemon.py
+```
+
+#### Step 3 — Install as a systemd service (auto-start on boot)
+
+```bash
+sudo tee /etc/systemd/system/wifi-monitor.service > /dev/null << 'EOF'
+[Unit]
+Description=WiFi Monitor Daemon for CYDPiAlert
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/wifi_monitor_daemon.py wlan0
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable wifi-monitor.service
+sudo systemctl start wifi-monitor.service
+```
+
+#### Step 4 — Auto-learn window
+
+On first start the daemon runs a **60-second auto-learn window** — every AP visible during that time is added to a whitelist saved at `/etc/wifi_monitor_whitelist.json`. After the window closes, any new BSSID seen is flagged as a rogue AP. The CYD's Mode 12 displays a countdown bar and "LEARNING" message during this window.
+
+> 💡 Make sure all your own APs are active and nearby when the daemon first starts. To re-learn, delete `/etc/wifi_monitor_whitelist.json` and restart the service.
+
+#### Monitor mode note
+
+Full deauth detection and channel hopping require the Pi's WiFi adapter to support **monitor mode**. The Pi 3B's built-in BCM43438 chip does not support this natively. Two options:
+
+- **Nexmon firmware patch** (no extra hardware) — patches the Pi 3B's WiFi firmware to add monitor mode. See [github.com/seemoo-lab/nexmon](https://github.com/seemoo-lab/nexmon).
+- **USB WiFi adapter** — any RTL8812AU, RTL8188EUS, or AR9271 chipset supports monitor mode. Pass the interface name (e.g. `wlan1`) to the daemon in the systemd `ExecStart` line.
+
+Without monitor mode the daemon **falls back gracefully** — it stays running, captures beacon frames visible on channel 1 (known AP count, rogue AP detection), and still provides WiFi status data to the CYD. Deauth counts and probe rates will remain at 0.
+
+---
+
 ## First-Time Setup (ESP32)
 
 1. Flash the firmware using PlatformIO (`pio run --target upload`)
@@ -302,12 +365,14 @@ pio device monitor --baud 115200
 CYDPiAlert/
 ├── platformio.ini              # PlatformIO config (board, libs)
 ├── pialert-patch/
-│   └── index.php               # Patched Pi.Alert API file (drop-in replacement)
+│   ├── index.php               # Patched Pi.Alert API file (drop-in replacement)
+│   └── wifi_monitor_daemon.py  # 802.11 RF monitor daemon (modes 12 & 13)
 ├── include/
 │   ├── Portal.h                # Captive portal: WiFi + Pi.Alert credentials, NVS
 │   ├── PiAlert.h               # HTTP fetch functions + data structs for modes 0–9
 │   ├── ArpWatch.h              # Fetch functions for Mode 10 (ARP Watch)
 │   ├── ArpStatus.h             # Fetch functions for Mode 11 (ARP Status)
+│   ├── WifiMonitor.h           # Fetch functions for Modes 12 & 13 (WiFi monitor)
 │   └── CYDIdentity.h           # /identify HTTP endpoint (device self-identification)
 └── src/
     └── main.cpp                # Display init, all draw functions, touch + button, Mode Manager
@@ -326,6 +391,8 @@ CYDPiAlert/
 | `WiFi failed: "YourSSID"` | Wrong SSID or password | Hold BOOT 3s to re-enter setup |
 | Screen stays on "Refreshing..." | Pi.Alert scan still running | Wait — Pi.Alert scans run every 3–5 minutes |
 | Mode 10/11 shows "No ARP data" | `arpwatch_daemon.py` not running | Start the daemon, or disable modes 10/11 via Mode Manager |
+| Mode 12/13 shows "Fetch failed: Daemon not running" | `wifi_monitor_daemon.py` not running | `sudo systemctl start wifi-monitor.service` |
+| Mode 12 stuck on "LEARNING" | Daemon crashed and restarted during learn window | Wait 60s; if looping check `journalctl -u wifi-monitor.service` |
 
 ---
 
@@ -339,6 +406,8 @@ CYDPiAlert/
 - **Mode 7 — Uptime Bars** shows how long each currently-online device has been continuously present. Scale caps at 2 weeks — any device online longer fills the bar completely.
 - **Mode 8 — Presence Bars** shows device regularity over 30 days. Green = very regular (20+ days), yellow = occasional (7–19 days), grey = rarely seen (<7 days).
 - **Mode 9 — ESP Devices** probes every known IP on your network for a `/identify` HTTP endpoint. Any CYD-based project (CYDPiHole, CYDEbayTicker, etc.) that implements the endpoint will appear here with name, firmware version, RSSI, and uptime.
+- **Mode 12 — WiFi Status** shows a color-coded status banner (green=ok, yellow=warning, red=anomaly). During the first 60 seconds after daemon start it shows a "LEARNING" countdown — this is normal; all visible APs are being whitelisted. The mode auto-refreshes from the daemon's JSON every 30 seconds.
+- **Mode 13 — WiFi Detail** shows the channel activity bar chart (channels 1–13), rogue AP list with BSSID/channel/RSSI/SSID, last deauth event, and top BSSIDs by frame count. Without monitor mode (see WiFi Monitor setup), deauths and probe rates stay at 0 but AP detection still works on channel 1.
 - Compatible with the original [Pi.Alert by pucherot](https://github.com/pucherot/Pi.Alert). Forks (Pi.Alert CE, IPAM) may have different API paths or database schemas.
 
 ---
