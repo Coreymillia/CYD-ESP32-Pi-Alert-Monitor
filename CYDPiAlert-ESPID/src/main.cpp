@@ -45,6 +45,7 @@ static unsigned long lastTouchTime = 0;
 
 #include "Portal.h"
 #include "PiAlert.h"
+#include "ArpWatch.h"
 
 // ---------------------------------------------------------------------------
 // Device identity — reported via GET /identify on port 80
@@ -66,7 +67,8 @@ static unsigned long lastTouchTime = 0;
 #define MODE_UPTIME     7
 #define MODE_PRESENCE   8
 #define MODE_ESP        9
-#define NUM_MODES       10
+#define MODE_ARP        10
+#define NUM_MODES       11
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
@@ -81,7 +83,8 @@ static const char *modeTitle[] = {
   "IP History",
   "Uptime",
   "Presence",
-  "ESP Devices"
+  "ESP Devices",
+  "ARP Watch"
 };
 
 // ---------------------------------------------------------------------------
@@ -179,6 +182,10 @@ void drawChrome() {
     gfx->setCursor(136, COLHDR_Y + 1); gfx->print("VER");
     gfx->setCursor(184, COLHDR_Y + 1); gfx->print("RSSI");
     gfx->setCursor(232, COLHDR_Y + 1); gfx->print("UP");
+  } else if (currentMode == MODE_ARP) {
+    gfx->setCursor(2,   COLHDR_Y + 1); gfx->print("TYPE");
+    gfx->setCursor(72,  COLHDR_Y + 1); gfx->print("IP");
+    gfx->setCursor(210, COLHDR_Y + 1); gfx->print("TIME");
   }
   // MODE_DASHBOARD: no column headers
 
@@ -748,6 +755,66 @@ void drawCydDevices() {
 }
 
 // ---------------------------------------------------------------------------
+// Mode 10 — ARP Watch: anomalies detected by arpwatch_daemon.py on the Pi.
+// Each row (21px): line 1 = [TYPE] [IP] [HH:MM], line 2 = old_mac > new_mac
+// Colour: GATEWAY_MAC/ARP_SPOOF = red, MAC_CHANGE = yellow, clean = green.
+// ---------------------------------------------------------------------------
+#define COLOR_SPOOF 0xFC00   // orange — ARP_SPOOF
+
+void drawArpAlerts() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (arp_alert_count == 0) {
+    gfx->setTextColor(COLOR_ONLINE);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No ARP anomalies detected.");
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setCursor(4, ROWS_Y + 20);
+    gfx->print("Network looks clean!");
+    return;
+  }
+
+  for (int i = 0; i < arp_alert_count; i++) {
+    ArpAlert &a = arp_alerts[i];
+    int y = ROWS_Y + i * ROW_H;
+
+    // Alert type colour
+    uint16_t typeColor;
+    if      (strncmp(a.type, "GATEWAY_MAC", 11) == 0) typeColor = COLOR_NEW;
+    else if (strncmp(a.type, "ARP_SPOOF",    9) == 0) typeColor = COLOR_SPOOF;
+    else                                               typeColor = 0xFFE0;  // yellow
+
+    // Line 1: TYPE (left) + IP (mid) + HH:MM (right)
+    gfx->setTextSize(1);
+    gfx->setTextColor(typeColor);
+    gfx->setCursor(2, y + 2);
+    gfx->print(a.type);
+
+    gfx->setTextColor(COLOR_TEXT);
+    gfx->setCursor(72, y + 2);
+    gfx->print(a.ip);
+
+    // Time: extract HH:MM from "YYYY-MM-DD HH:MM:SS"
+    char timeBuf[6] = "";
+    if (strlen(a.time) >= 16) {
+      strncpy(timeBuf, a.time + 11, 5);
+      timeBuf[5] = '\0';
+    }
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setCursor(210, y + 2);
+    gfx->print(timeBuf);
+
+    // Line 2: old_mac > new_mac (dimmed; 17+3+17 = 37 chars = 222px — fits)
+    gfx->setTextColor(0x4208);  // dark grey
+    gfx->setCursor(2, y + 12);
+    char macLine[40];
+    snprintf(macLine, sizeof(macLine), "%s>%s", a.old_mac, a.new_mac);
+    gfx->print(macLine);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fetch + redraw for the current mode
 void refreshDisplay() {
   // ESP Devices scan is slow — update only the header bar so the previous results
@@ -782,6 +849,7 @@ void refreshDisplay() {
   if (currentMode == MODE_MAC)       ok = paFetchMacHistory();
   if (currentMode == MODE_UPTIME)    ok = paFetchUptime();
   if (currentMode == MODE_PRESENCE)  ok = paFetchPresence();
+  if (currentMode == MODE_ARP)       ok = paFetchArpAlerts();
 
   if (ok) {
     modeHasData[currentMode] = true;
@@ -795,6 +863,7 @@ void refreshDisplay() {
     if (currentMode == MODE_MAC)       drawMacHistory();
     if (currentMode == MODE_UPTIME)    drawUptimeBars();
     if (currentMode == MODE_PRESENCE)  drawPresenceBars();
+    if (currentMode == MODE_ARP)       drawArpAlerts();
   } else if (modeHasData[currentMode]) {
     gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x3000);  // dark red
     char errMsg[52];

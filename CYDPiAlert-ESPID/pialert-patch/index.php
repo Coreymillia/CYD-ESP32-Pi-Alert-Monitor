@@ -64,6 +64,8 @@ if (isset($_REQUEST['get']) && !empty($_REQUEST['get'])) {
 		break;
 	case 'all-device-ips':getAllDeviceIPs();
 		break;
+	case 'arp-alerts':getArpAlerts();
+		break;
 	}
 }
 
@@ -449,6 +451,26 @@ function getAllDeviceIPs() {
 		$i++;
 	}
 	echo json_encode($out);
+	echo "\n";
+}
+
+// Returns the 10 most recent ARP anomalies written by arpwatch_daemon.py.
+// Alert types: GATEWAY_MAC (gateway MAC changed), MAC_CHANGE (device MAC changed),
+//              ARP_SPOOF (device MAC oscillating — active cache poisoning).
+function getArpAlerts() {
+	$alerts_file = '/tmp/arp_alerts.json';
+	if (!file_exists($alerts_file)) {
+		echo json_encode([]);
+		echo "\n";
+		return;
+	}
+	$json = file_get_contents($alerts_file);
+	if ($json === false) {
+		echo json_encode([]);
+		echo "\n";
+		return;
+	}
+	echo $json;
 	echo "\n";
 }
 ?>
