@@ -74,6 +74,7 @@ static unsigned long lastTouchTime = 0;
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
+static bool modeEnabled[NUM_MODES];
 
 static const char *modeTitle[] = {
   "Pi.Alert",
@@ -1078,7 +1079,134 @@ void refreshDisplay() {
 }
 
 // ---------------------------------------------------------------------------
-// Button handler — short press = cycle mode, 3s hold = restart into setup
+// Mode enable/disable — stored as bitmask in NVS
+// ---------------------------------------------------------------------------
+static void loadModeEnabled() {
+  Preferences prefs;
+  prefs.begin("cydpialert", true);
+  uint16_t mask = prefs.getUShort("modemask", 0xFFFF);
+  prefs.end();
+  for (int i = 0; i < NUM_MODES; i++)
+    modeEnabled[i] = (mask >> i) & 1;
+}
+
+static void saveModeEnabled() {
+  uint16_t mask = 0;
+  for (int i = 0; i < NUM_MODES; i++)
+    if (modeEnabled[i]) mask |= (1 << i);
+  Preferences prefs;
+  prefs.begin("cydpialert", false);
+  prefs.putUShort("modemask", mask);
+  prefs.end();
+}
+
+// Cycle to next/prev enabled mode, skipping disabled ones
+static void changeMode(int delta) {
+  int next = currentMode;
+  for (int i = 0; i < NUM_MODES; i++) {
+    next = (next + NUM_MODES + delta) % NUM_MODES;
+    if (modeEnabled[next]) break;
+  }
+  currentMode = next;
+  refreshDisplay();
+}
+
+// Toggle a mode on/off — refuses to disable the last enabled mode
+static void toggleMode(int idx) {
+  if (modeEnabled[idx]) {
+    int count = 0;
+    for (int i = 0; i < NUM_MODES; i++) if (modeEnabled[i]) count++;
+    if (count <= 1) return;
+  }
+  modeEnabled[idx] = !modeEnabled[idx];
+}
+
+// Draw the Mode Manager overlay
+static void drawModeManager(int selected) {
+  gfx->fillScreen(RGB565_BLACK);
+  gfx->fillRect(0, 0, gfx->width(), 14, COLOR_HEADER);
+  gfx->setTextColor(RGB565_WHITE);
+  gfx->setTextSize(1);
+  gfx->setCursor(4, 3);
+  gfx->print("MODE MANAGER");
+  gfx->setTextColor(COLOR_DIM);
+  gfx->setCursor(172, 3);
+  gfx->print("hold BOOT to exit");
+
+  for (int i = 0; i < NUM_MODES; i++) {
+    int y = 16 + i * 17;
+    bool isSel = (i == selected);
+    bool isOn  = modeEnabled[i];
+    if (isSel)
+      gfx->fillRect(0, y, gfx->width(), 16, 0x1082);
+    gfx->setTextColor(isOn ? COLOR_ONLINE : COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(4, y + 4);
+    gfx->print(isOn ? "[ON ] " : "[OFF] ");
+    gfx->setTextColor(isSel ? RGB565_WHITE : (isOn ? COLOR_TEXT : COLOR_DIM));
+    gfx->print(modeTitle[i]);
+  }
+
+  gfx->setTextColor(COLOR_DIM);
+  gfx->setCursor(4, 16 + NUM_MODES * 17 + 2);
+  gfx->print("< prev  center:toggle  next >");
+}
+
+// Blocking mode manager — entered via 1.5s BOOT hold
+static void openModeManager() {
+  int selected = currentMode;
+  drawModeManager(selected);
+
+  unsigned long lastInput = millis();
+  while (true) {
+    // Touch: left third = prev, right third = next, center = toggle
+    if (ts.tirqTouched() && ts.touched()) {
+      unsigned long now = millis();
+      if (now - lastInput > TOUCH_DEBOUNCE) {
+        lastInput = now;
+        TS_Point p = ts.getPoint();
+        int tx = map(p.x, 200, 3900, 0, gfx->width());
+        tx = constrain(tx, 0, gfx->width() - 1);
+        int third = gfx->width() / 3;
+        if (tx < third)
+          selected = (selected + NUM_MODES - 1) % NUM_MODES;
+        else if (tx > 2 * third)
+          selected = (selected + 1) % NUM_MODES;
+        else
+          toggleMode(selected);
+        drawModeManager(selected);
+      }
+    }
+
+    // BOOT: short press = toggle selected, hold 1.5s = exit
+    if (digitalRead(0) == LOW) {
+      unsigned long pressStart = millis();
+      bool longHeld = false;
+      while (digitalRead(0) == LOW) {
+        if (millis() - pressStart >= 1500) { longHeld = true; break; }
+        delay(20);
+      }
+      while (digitalRead(0) == LOW) delay(20);  // wait for full release
+      if (longHeld) break;
+      toggleMode(selected);
+      drawModeManager(selected);
+    }
+
+    delay(20);
+  }
+
+  saveModeEnabled();
+  if (!modeEnabled[currentMode])
+    changeMode(+1);
+  else {
+    drawChrome();
+    refreshDisplay();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Button handler — short press = next mode, 1.5s hold = mode manager,
+//                  3s hold = restart into setup
 // ---------------------------------------------------------------------------
 void checkButton() {
   if (digitalRead(0) != LOW) return;
@@ -1097,8 +1225,12 @@ void checkButton() {
     delay(20);
   }
 
-  currentMode = (currentMode + 1) % NUM_MODES;
-  refreshDisplay();
+  unsigned long held = millis() - pressStart;
+  if (held >= 1500) {
+    openModeManager();
+  } else {
+    changeMode(+1);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,6 +1256,7 @@ void setup() {
   ts.setRotation(1);
 
   paLoadSettings();
+  loadModeEnabled();
 
   bool showPortal = !pa_has_settings || pa_force_portal;
 
@@ -1195,10 +1328,9 @@ void loop() {
       int tx = map(p.x, 200, 3900, 0, gfx->width());
       tx = constrain(tx, 0, gfx->width() - 1);
       if (tx < gfx->width() / 2)
-        currentMode = (currentMode + NUM_MODES - 1) % NUM_MODES;  // left → prev
+        changeMode(-1);
       else
-        currentMode = (currentMode + 1) % NUM_MODES;              // right → next
-      refreshDisplay();
+        changeMode(+1);
       lastRefresh = millis();
     }
   }
