@@ -26,6 +26,9 @@ Fetches live network data from your local [Pi.Alert](https://github.com/pucherot
 | **11** | **ARP Status** | Full ARP health dashboard — gateway MAC match, rate, top talkers, last events |
 | **12** | **WiFi Status** | RF-layer summary — status banner (ok/warning/anomaly), deauth count + last timestamp, rogue AP count, probe rate, known AP count, hidden SSIDs, auto-learn countdown |
 | **13** | **WiFi Detail** | Full RF detail — rogue AP list (BSSID/channel/RSSI/SSID), channel activity bar chart (ch 1–13), last deauth event with src→dst MAC, top BSSIDs with frame counts |
+| **14** | **WiFi AP Scan** | Live list of all visible access points — SSID, channel, RSSI bar, security (Open/WEP/WPA/WPA2/WPA3). Sorted by signal strength. Updates every 30 seconds. Works without monitor mode. |
+| **15** | **Shady Networks** | Suspicious network analyzer — scores each visible AP for evil-twin attacks, open networks, hidden SSIDs, suspiciously strong signals, and malicious SSID patterns. Color-coded threat/warning/clean status. |
+| **16** | **BLE Devices** | Bluetooth LE device scanner — lists all nearby BLE devices with MAC, name, and RSSI bar. Flags devices matching known card-skimmer OUI prefixes or suspicious device names. |
 
 ---
 
@@ -158,6 +161,9 @@ Most modes require custom API endpoints added to Pi.Alert's `index.php`. Modes 1
 | 11 — ARP Status | `arp-status` | **Yes — patch index.php + arpwatch_daemon.py** |
 | 12 — WiFi Status | *(file-based)* | **Yes — patch index.php + wifi_monitor_daemon.py** |
 | 13 — WiFi Detail | *(file-based)* | **Yes — patch index.php + wifi_monitor_daemon.py** |
+| 14 — WiFi AP Scan | *(file-based)* | **Yes — patch index.php + wifi_scan_daemon.py** |
+| 15 — Shady Networks | *(file-based)* | **Yes — patch index.php + wifi_scan_daemon.py** |
+| 16 — BLE Devices | *(file-based)* | **Yes — patch index.php + ble_scan_daemon.py** |
 
 > 💡 If you only want basic network monitoring, Modes 0–2 work with a stock Pi.Alert install. Use the [Mode Manager](#mode-manager-toggle-modes-onoff) to disable everything else.
 
@@ -314,6 +320,88 @@ Full deauth detection and channel hopping require the Pi's WiFi adapter to suppo
 
 Without monitor mode the daemon **falls back gracefully** — it stays running, captures beacon frames visible on channel 1 (known AP count, rogue AP detection), and still provides WiFi status data to the CYD. Deauth counts and probe rates will remain at 0.
 
+> 💡 **Nexmon** patches the Pi 3B's BCM43438 firmware to add monitor mode (full deauth + probe detection). It's complex to install and OS upgrades can break it. Treat it as an optional advanced enhancement — Modes 12/13 provide partial data without it, and Modes 14–16 work entirely without it.
+
+---
+
+### WiFi AP Scan + Shady Networks (Modes 14 & 15) — Additional Setup
+
+Modes 14 and 15 are powered by `wifi_scan_daemon.py`. It runs `iw dev wlan0 scan` every 30 seconds — **no monitor mode required** — to build a live list of visible access points and score each one for suspicious characteristics (evil twins, open networks, random SSIDs, etc.).
+
+```bash
+# Copy daemon to Pi
+sudo cp pialert-patch/wifi_scan_daemon.py /home/pi/wifi_scan_daemon.py
+
+# Install as systemd service
+sudo tee /etc/systemd/system/wifi-scan.service > /dev/null << 'EOF'
+[Unit]
+Description=CYDPiAlert WiFi AP Scan Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/wifi_scan_daemon.py
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable wifi-scan.service
+sudo systemctl start wifi-scan.service
+```
+
+#### Shady scoring explained
+
+| Flag | Description | Score |
+|------|-------------|-------|
+| `evil_twin` | Same SSID seen from 2+ different BSSIDs | +40 |
+| `open` | No encryption | +20 |
+| `hidden_ssid` | SSID field is empty/hidden | +10 |
+| `strong_signal` | RSSI > −30 dBm (suspiciously close) | +15 |
+| `suspicious_ssid` | Contains known bait-SSID keywords | +25 |
+| `random_ssid` | All-hex SSID (looks auto-generated) | +15 |
+| `suspicious_oui` | OUI matches known cheap hacking hardware | +30 |
+
+Networks with a total score ≥ 25 appear in **Mode 15 — Shady Networks**. Scores ≥ 60 trigger a "THREAT" banner; 30–59 show "WARNING".
+
+---
+
+### BLE Scanner (Mode 16) — Additional Setup
+
+Mode 16 is powered by `ble_scan_daemon.py`. It uses `bluetoothctl` to scan for nearby Bluetooth LE devices every 45 seconds. The Pi 3B has a built-in BCM43438 Bluetooth radio — no extra hardware needed.
+
+```bash
+# Copy daemon to Pi
+sudo cp pialert-patch/ble_scan_daemon.py /home/pi/ble_scan_daemon.py
+
+# Install as systemd service
+sudo tee /etc/systemd/system/ble-scan.service > /dev/null << 'EOF'
+[Unit]
+Description=CYDPiAlert BLE Scanner Daemon
+After=bluetooth.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/ble_scan_daemon.py
+Restart=always
+RestartSec=15
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable ble-scan.service
+sudo systemctl start ble-scan.service
+```
+
+Devices are flagged as suspicious if their MAC OUI matches known cheap BLE module prefixes commonly used in card skimmers, or if their advertised name matches known skimmer name patterns (`HC-05`, `HC-06`, `linvor`, etc.). Flagged devices are highlighted in red.
+
 ---
 
 ## First-Time Setup (ESP32)
@@ -366,13 +454,17 @@ CYDPiAlert/
 ├── platformio.ini              # PlatformIO config (board, libs)
 ├── pialert-patch/
 │   ├── index.php               # Patched Pi.Alert API file (drop-in replacement)
-│   └── wifi_monitor_daemon.py  # 802.11 RF monitor daemon (modes 12 & 13)
+│   ├── wifi_monitor_daemon.py  # 802.11 RF monitor daemon (modes 12 & 13)
+│   ├── wifi_scan_daemon.py     # WiFi AP scanner + shady scorer (modes 14 & 15)
+│   └── ble_scan_daemon.py      # BLE device scanner + skimmer detector (mode 16)
 ├── include/
 │   ├── Portal.h                # Captive portal: WiFi + Pi.Alert credentials, NVS
 │   ├── PiAlert.h               # HTTP fetch functions + data structs for modes 0–9
 │   ├── ArpWatch.h              # Fetch functions for Mode 10 (ARP Watch)
 │   ├── ArpStatus.h             # Fetch functions for Mode 11 (ARP Status)
 │   ├── WifiMonitor.h           # Fetch functions for Modes 12 & 13 (WiFi monitor)
+│   ├── WifiScan.h              # Fetch functions for Modes 14 & 15 (WiFi AP scan)
+│   ├── BleScan.h               # Fetch functions for Mode 16 (BLE devices)
 │   └── CYDIdentity.h           # /identify HTTP endpoint (device self-identification)
 └── src/
     └── main.cpp                # Display init, all draw functions, touch + button, Mode Manager
@@ -393,6 +485,8 @@ CYDPiAlert/
 | Mode 10/11 shows "No ARP data" | `arpwatch_daemon.py` not running | Start the daemon, or disable modes 10/11 via Mode Manager |
 | Mode 12/13 shows "Fetch failed: Daemon not running" | `wifi_monitor_daemon.py` not running | `sudo systemctl start wifi-monitor.service` |
 | Mode 12 stuck on "LEARNING" | Daemon crashed and restarted during learn window | Wait 60s; if looping check `journalctl -u wifi-monitor.service` |
+| Mode 14/15 shows "Fetch failed: Daemon not running" | `wifi_scan_daemon.py` not running | `sudo systemctl start wifi-scan.service` |
+| Mode 16 shows "Fetch failed: Daemon not running" | `ble_scan_daemon.py` not running | `sudo systemctl start ble-scan.service` |
 
 ---
 
@@ -407,7 +501,10 @@ CYDPiAlert/
 - **Mode 8 — Presence Bars** shows device regularity over 30 days. Green = very regular (20+ days), yellow = occasional (7–19 days), grey = rarely seen (<7 days).
 - **Mode 9 — ESP Devices** probes every known IP on your network for a `/identify` HTTP endpoint. Any CYD-based project (CYDPiHole, CYDEbayTicker, etc.) that implements the endpoint will appear here with name, firmware version, RSSI, and uptime.
 - **Mode 12 — WiFi Status** shows a color-coded status banner (green=ok, yellow=warning, red=anomaly). During the first 60 seconds after daemon start it shows a "LEARNING" countdown — this is normal; all visible APs are being whitelisted. The mode auto-refreshes from the daemon's JSON every 30 seconds.
-- **Mode 13 — WiFi Detail** shows the channel activity bar chart (channels 1–13), rogue AP list with BSSID/channel/RSSI/SSID, last deauth event, and top BSSIDs by frame count. Without monitor mode (see WiFi Monitor setup), deauths and probe rates stay at 0 but AP detection still works on channel 1.
+- **Mode 13 — WiFi Detail** shows the channel activity bar chart (channels 1–13), rogue AP list with BSSID/channel/RSSI/SSID, last deauth event, and top BSSIDs by frame count. Without monitor mode, deauths and probe rates stay at 0 but AP detection still works on channel 1.
+- **Mode 14 — WiFi AP Scan** lists all visible networks sorted by signal strength with RSSI bars and security badges. Open networks are shown in red. Updates every 30 seconds — **works without monitor mode**.
+- **Mode 15 — Shady Networks** analyzes each visible AP for threat indicators. A score ≥ 25 makes it "shady", ≥ 60 triggers a red THREAT banner. An empty list means all your nearby networks look clean.
+- **Mode 16 — BLE Devices** scans every ~45 seconds. Most home environments will show phones, smart speakers, and fitness trackers. Red `!!` prefix = suspicious OUI or name. An empty list just means no BLE devices are broadcasting nearby.
 - Compatible with the original [Pi.Alert by pucherot](https://github.com/pucherot/Pi.Alert). Forks (Pi.Alert CE, IPAM) may have different API paths or database schemas.
 
 ---

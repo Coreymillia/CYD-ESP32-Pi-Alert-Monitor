@@ -72,6 +72,12 @@ if (isset($_REQUEST['get']) && !empty($_REQUEST['get'])) {
 		break;
 	case 'wifi-detail':getWifiDetail();
 		break;
+	case 'wifi-scan':getWifiScan();
+		break;
+	case 'wifi-shady':getWifiShady();
+		break;
+	case 'ble-devices':getBleDevices();
+		break;
 	}
 }
 
@@ -522,6 +528,45 @@ function getWifiDetail() {
 	$f = '/tmp/wifi_detail.json';
 	if (!file_exists($f)) {
 		echo json_encode(['status' => 'unavailable', 'error' => 'daemon not running']);
+		echo "\n";
+		return;
+	}
+	$json = file_get_contents($f);
+	echo ($json !== false) ? $json : json_encode(['error' => 'read error']);
+	echo "\n";
+}
+
+// Returns the Wi-Fi AP scan list written by wifi_scan_daemon.py.
+function getWifiScan() {
+	$f = '/tmp/wifi_scan.json';
+	if (!file_exists($f)) {
+		echo json_encode(['error' => 'daemon not running']);
+		echo "\n";
+		return;
+	}
+	$json = file_get_contents($f);
+	echo ($json !== false) ? $json : json_encode(['error' => 'read error']);
+	echo "\n";
+}
+
+// Returns the shady-network list written by wifi_scan_daemon.py.
+function getWifiShady() {
+	$f = '/tmp/wifi_shady.json';
+	if (!file_exists($f)) {
+		echo json_encode(['error' => 'daemon not running']);
+		echo "\n";
+		return;
+	}
+	$json = file_get_contents($f);
+	echo ($json !== false) ? $json : json_encode(['error' => 'read error']);
+	echo "\n";
+}
+
+// Returns the BLE device list written by ble_scan_daemon.py.
+function getBleDevices() {
+	$f = '/tmp/ble_devices.json';
+	if (!file_exists($f)) {
+		echo json_encode(['error' => 'daemon not running']);
 		echo "\n";
 		return;
 	}

@@ -48,6 +48,8 @@ static unsigned long lastTouchTime = 0;
 #include "ArpWatch.h"
 #include "ArpStatus.h"
 #include "WifiMonitor.h"
+#include "WifiScan.h"
+#include "BleScan.h"
 
 // ---------------------------------------------------------------------------
 // Device identity — reported via GET /identify on port 80
@@ -73,7 +75,10 @@ static unsigned long lastTouchTime = 0;
 #define MODE_ARP_STATUS 11
 #define MODE_WIFI_STATUS 12
 #define MODE_WIFI_DETAIL 13
-#define NUM_MODES       14
+#define MODE_WIFI_SCAN   14
+#define MODE_WIFI_SHADY  15
+#define MODE_BLE         16
+#define NUM_MODES        17
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
@@ -93,7 +98,10 @@ static const char *modeTitle[] = {
   "ARP Watch",
   "ARP Status",
   "WiFi Status",
-  "WiFi Detail"
+  "WiFi Detail",
+  "WiFi AP Scan",
+  "Shady Networks",
+  "BLE Devices"
 };
 
 // ---------------------------------------------------------------------------
@@ -242,6 +250,39 @@ void drawChrome() {
       gfx->print(pbuf);
     } else {
       gfx->setCursor(2, COLHDR_Y + 1); gfx->print("WiFi DETAIL");
+    }
+  } else if (currentMode == MODE_WIFI_SCAN) {
+    if (wifi_scan_data.valid) {
+      gfx->setCursor(2, COLHDR_Y + 1);
+      char buf[28]; snprintf(buf, sizeof(buf), "%d APs  @%s", wifi_scan_data.ap_count, wifi_scan_data.scan_time);
+      gfx->print(buf);
+      gfx->setCursor(200, COLHDR_Y + 1); gfx->print("SSID  CH  SEC");
+    } else {
+      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("WiFi AP Scan");
+    }
+  } else if (currentMode == MODE_WIFI_SHADY) {
+    if (wifi_shady_data.valid) {
+      bool isThreat  = strcmp(wifi_shady_data.status, "threat")  == 0;
+      bool isWarning = strcmp(wifi_shady_data.status, "warning") == 0;
+      uint16_t sc = isThreat ? COLOR_NEW : isWarning ? 0xFFE0 : COLOR_ONLINE;
+      gfx->setTextColor(sc);
+      gfx->setCursor(2, COLHDR_Y + 1);
+      char buf[28]; snprintf(buf, sizeof(buf), "%s  %d shady  score:%d",
+                             wifi_shady_data.status, wifi_shady_data.shady_count, wifi_shady_data.max_score);
+      gfx->print(buf);
+    } else {
+      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("Shady Networks");
+    }
+  } else if (currentMode == MODE_BLE) {
+    if (ble_scan_data.valid) {
+      uint16_t sc = ble_scan_data.suspicious_count > 0 ? COLOR_NEW : COLOR_ONLINE;
+      gfx->setTextColor(sc);
+      gfx->setCursor(2, COLHDR_Y + 1);
+      char buf[32]; snprintf(buf, sizeof(buf), "%d BLE  %d suspicious  @%s",
+                             ble_scan_data.device_count, ble_scan_data.suspicious_count, ble_scan_data.scan_time);
+      gfx->print(buf);
+    } else {
+      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("BLE Devices");
     }
   }
   // MODE_DASHBOARD: no column headers
@@ -1282,6 +1323,203 @@ void drawWifiDetail() {
 }
 
 // ---------------------------------------------------------------------------
+// Mode 14 — WiFi AP Scan: sorted list of visible access points
+// ---------------------------------------------------------------------------
+void drawWifiScan() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (!wifi_scan_data.valid) {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No data. Is wifi_scan_daemon.py running?");
+    return;
+  }
+
+  WifiScanData &d = wifi_scan_data;
+  const int BAR_X   = 218;   // RSSI bar start x
+  const int BAR_W   = 56;    // RSSI bar max width
+  const int AP_ROW  = 9;
+
+  gfx->setTextSize(1);
+  int y = ROWS_Y + 1;
+
+  for (int i = 0; i < d.ap_count && i < SCAN_MAX_APS; i++) {
+    if (y + AP_ROW > gfx->height()) break;
+    WifiApEntry &ap = d.aps[i];
+
+    // SSID (truncated to 18 chars)
+    char ssid[19];
+    truncate(ap.ssid, ssid, 18);
+    gfx->setTextColor(ap.hidden ? COLOR_DIM : COLOR_TEXT);
+    gfx->setCursor(2, y);
+    gfx->print(ssid);
+
+    // Channel
+    gfx->setTextColor(COLOR_DIM);
+    char chbuf[4]; snprintf(chbuf, sizeof(chbuf), "%2d", ap.channel);
+    gfx->setCursor(114, y); gfx->print(chbuf);
+
+    // Security badge
+    uint16_t secColor = (strcmp(ap.security, "Open") == 0) ? 0xF800 :
+                        (strcmp(ap.security, "WEP")  == 0) ? 0xFFE0 : COLOR_ONLINE;
+    gfx->setTextColor(secColor);
+    gfx->setCursor(130, y); gfx->print(ap.security);
+
+    // RSSI bar: map [-90, -30] → [0, BAR_W]
+    int rssiClamped = ap.rssi < -90 ? -90 : ap.rssi > -30 ? -30 : ap.rssi;
+    int bw = (rssiClamped + 90) * BAR_W / 60;
+    uint16_t barColor = (ap.rssi > -55) ? COLOR_ONLINE :
+                        (ap.rssi > -70) ? 0xFFE0 : 0xC180;
+    gfx->fillRect(BAR_X,      y, bw,          7, barColor);
+    gfx->fillRect(BAR_X + bw, y, BAR_W - bw,  7, 0x1082);
+
+    y += AP_ROW;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode 15 — Shady Networks: scored list of suspicious nearby APs
+// ---------------------------------------------------------------------------
+void drawWifiShady() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (!wifi_shady_data.valid) {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No data. Is wifi_scan_daemon.py running?");
+    return;
+  }
+
+  WifiShadyData &d = wifi_shady_data;
+  bool isThreat  = strcmp(d.status, "threat")  == 0;
+  bool isWarning = strcmp(d.status, "warning") == 0;
+
+  // ── Status banner ──────────────────────────────────────────────────────────
+  uint16_t sBg  = isThreat ? 0x8000 : isWarning ? 0x8420 : 0x0280;
+  uint16_t sFg  = isThreat ? COLOR_NEW : isWarning ? 0xFFE0 : COLOR_ONLINE;
+  const char *sLabel = isThreat ? "!! THREAT !!" : isWarning ? "! WARNING" : "CLEAN";
+  gfx->fillRect(0, ROWS_Y, gfx->width(), 18, sBg);
+  gfx->setTextColor(sFg); gfx->setTextSize(1);
+  gfx->setCursor(4, ROWS_Y + 5); gfx->print(sLabel);
+  gfx->setTextColor(0xC618);
+  char scbuf[20]; snprintf(scbuf, sizeof(scbuf), "max score: %d", d.max_score);
+  gfx->setCursor(120, ROWS_Y + 5); gfx->print(scbuf);
+
+  if (d.shady_count == 0) {
+    gfx->setTextColor(COLOR_ONLINE); gfx->setCursor(4, ROWS_Y + 28);
+    gfx->print("No suspicious networks nearby.");
+    return;
+  }
+
+  gfx->setTextSize(1);
+  int y = ROWS_Y + 22;
+
+  for (int i = 0; i < d.shady_count && i < SHADY_MAX_APS; i++) {
+    if (y + 17 > gfx->height()) break;
+    WifiShadyEntry &ap = d.shady_aps[i];
+
+    // Score bar (0–100 mapped to 60px)
+    int bw = ap.score * 60 / 100;
+    uint16_t barColor = (ap.score >= 60) ? COLOR_NEW : (ap.score >= 30) ? 0xFFE0 : COLOR_ONLINE;
+    gfx->fillRect(0, y, bw, 7, barColor);
+    gfx->fillRect(bw, y, 60 - bw, 7, 0x1082);
+    char scbuf2[5]; snprintf(scbuf2, sizeof(scbuf2), "%3d", ap.score);
+    gfx->setTextColor(barColor); gfx->setCursor(63, y); gfx->print(scbuf2);
+
+    // SSID
+    char ssid[16]; truncate(ap.ssid, ssid, 15);
+    gfx->setTextColor(COLOR_TEXT); gfx->setCursor(87, y); gfx->print(ssid);
+
+    // Security badge
+    uint16_t secColor = (strcmp(ap.security, "Open") == 0) ? COLOR_NEW : COLOR_ONLINE;
+    gfx->setTextColor(secColor);
+    gfx->setCursor(207, y); gfx->print(ap.security);
+
+    // Flags (second line, abbreviated)
+    y += 9;
+    gfx->setTextColor(COLOR_DIM); gfx->setCursor(4, y);
+    gfx->print(ap.flags[0] ? ap.flags : "none");
+    y += 9;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode 16 — BLE Devices: nearby Bluetooth LE devices + skimmer flags
+// ---------------------------------------------------------------------------
+void drawBleDevices() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (!ble_scan_data.valid) {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No data. Is ble_scan_daemon.py running?");
+    return;
+  }
+
+  BleScanData &d = ble_scan_data;
+  bool isThreat = strcmp(d.status, "threat") == 0;
+
+  // ── Status banner ──────────────────────────────────────────────────────────
+  uint16_t sBg = isThreat ? 0x8000 : 0x0280;
+  uint16_t sFg = isThreat ? COLOR_NEW : COLOR_ONLINE;
+  gfx->fillRect(0, ROWS_Y, gfx->width(), 18, sBg);
+  gfx->setTextColor(sFg); gfx->setTextSize(1);
+  gfx->setCursor(4, ROWS_Y + 5);
+  if (isThreat) {
+    char buf[28]; snprintf(buf, sizeof(buf), "!! %d SUSPICIOUS DEVICE%s",
+                           d.suspicious_count, d.suspicious_count == 1 ? "" : "S");
+    gfx->print(buf);
+  } else {
+    gfx->print("CLEAN");
+  }
+  gfx->setTextColor(COLOR_DIM);
+  char cnt[10]; snprintf(cnt, sizeof(cnt), "%d seen", d.device_count);
+  gfx->setCursor(200, ROWS_Y + 5); gfx->print(cnt);
+
+  if (d.device_count == 0) {
+    gfx->setTextColor(COLOR_DIM); gfx->setCursor(4, ROWS_Y + 28);
+    gfx->print("No BLE devices found.");
+    return;
+  }
+
+  gfx->setTextSize(1);
+  int y = ROWS_Y + 22;
+  const int BAR_W = 50;
+
+  for (int i = 0; i < d.device_count && i < BLE_MAX_DEVICES; i++) {
+    if (y + 9 > gfx->height()) break;
+    BleDevice &dev = d.devices[i];
+
+    // Suspicious indicator
+    uint16_t nameColor = dev.suspicious ? COLOR_NEW : COLOR_TEXT;
+    gfx->setTextColor(dev.suspicious ? COLOR_NEW : COLOR_DIM);
+    gfx->setCursor(2, y);
+    gfx->print(dev.suspicious ? "!!" : "  ");
+
+    // Name (truncated)
+    char name[16]; truncate(dev.name, name, 15);
+    gfx->setTextColor(nameColor);
+    gfx->setCursor(16, y); gfx->print(name);
+
+    // MAC (last 3 octets to save space)
+    gfx->setTextColor(COLOR_DIM);
+    const char *shortMac = (strlen(dev.mac) >= 8) ? dev.mac + 9 : dev.mac;
+    gfx->setCursor(116, y); gfx->print(shortMac);
+
+    // RSSI bar: [-90, -30] → [0, BAR_W]
+    int rssiClamped = dev.rssi < -90 ? -90 : dev.rssi > -30 ? -30 : dev.rssi;
+    int bw = (rssiClamped + 90) * BAR_W / 60;
+    uint16_t barColor = dev.suspicious ? COLOR_NEW :
+                        (dev.rssi > -55) ? COLOR_ONLINE :
+                        (dev.rssi > -70) ? 0xFFE0 : 0xC180;
+    gfx->fillRect(266,      y, bw,          7, barColor);
+    gfx->fillRect(266 + bw, y, BAR_W - bw,  7, 0x1082);
+
+    y += 9;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fetch + redraw for the current mode
 void refreshDisplay() {
   // ESP Devices scan is slow — update only the header bar so the previous results
@@ -1320,6 +1558,9 @@ void refreshDisplay() {
   if (currentMode == MODE_ARP_STATUS)  ok = paFetchArpStatus();
   if (currentMode == MODE_WIFI_STATUS) ok = paFetchWifiStatus();
   if (currentMode == MODE_WIFI_DETAIL) ok = paFetchWifiDetail();
+  if (currentMode == MODE_WIFI_SCAN)   ok = paFetchWifiScan();
+  if (currentMode == MODE_WIFI_SHADY)  ok = paFetchWifiShady();
+  if (currentMode == MODE_BLE)         ok = paFetchBleDevices();
 
   if (ok) {
     modeHasData[currentMode] = true;
@@ -1337,6 +1578,9 @@ void refreshDisplay() {
     if (currentMode == MODE_ARP_STATUS)  drawArpStatus();
     if (currentMode == MODE_WIFI_STATUS) drawWifiStatus();
     if (currentMode == MODE_WIFI_DETAIL) drawWifiDetail();
+    if (currentMode == MODE_WIFI_SCAN)   drawWifiScan();
+    if (currentMode == MODE_WIFI_SHADY)  drawWifiShady();
+    if (currentMode == MODE_BLE)         drawBleDevices();
   } else if (modeHasData[currentMode]) {
     gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x3000);  // dark red
     char errMsg[52];
@@ -1363,19 +1607,19 @@ void refreshDisplay() {
 static void loadModeEnabled() {
   Preferences prefs;
   prefs.begin("cydpialert", true);
-  uint16_t mask = prefs.getUShort("modemask", 0xFFFF);
+  uint32_t mask = prefs.getUInt("modemask32", 0x1FFFF);
   prefs.end();
   for (int i = 0; i < NUM_MODES; i++)
     modeEnabled[i] = (mask >> i) & 1;
 }
 
 static void saveModeEnabled() {
-  uint16_t mask = 0;
+  uint32_t mask = 0;
   for (int i = 0; i < NUM_MODES; i++)
-    if (modeEnabled[i]) mask |= (1 << i);
+    if (modeEnabled[i]) mask |= (1u << i);
   Preferences prefs;
   prefs.begin("cydpialert", false);
-  prefs.putUShort("modemask", mask);
+  prefs.putUInt("modemask32", mask);
   prefs.end();
 }
 
@@ -1413,21 +1657,21 @@ static void drawModeManager(int selected) {
   gfx->print("hold BOOT to exit");
 
   for (int i = 0; i < NUM_MODES; i++) {
-    int y = 16 + i * 15;
+    int y = 16 + i * 13;
     bool isSel = (i == selected);
     bool isOn  = modeEnabled[i];
     if (isSel)
-      gfx->fillRect(0, y, gfx->width(), 14, 0x1082);
+      gfx->fillRect(0, y, gfx->width(), 12, 0x1082);
     gfx->setTextColor(isOn ? COLOR_ONLINE : COLOR_DIM);
     gfx->setTextSize(1);
-    gfx->setCursor(4, y + 3);
+    gfx->setCursor(4, y + 2);
     gfx->print(isOn ? "[ON ] " : "[OFF] ");
     gfx->setTextColor(isSel ? RGB565_WHITE : (isOn ? COLOR_TEXT : COLOR_DIM));
     gfx->print(modeTitle[i]);
   }
 
   gfx->setTextColor(COLOR_DIM);
-  gfx->setCursor(4, 16 + NUM_MODES * 15 + 2);
+  gfx->setCursor(4, 16 + NUM_MODES * 13 + 2);
   gfx->print("< prev  center:toggle  next >");
 }
 
