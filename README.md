@@ -1,27 +1,57 @@
 # CYDPiAlert
 
 A **Pi.Alert network presence monitor** running on the **CYD (Cheap Yellow Display)** ESP32 board.  
-Fetches live network data from your local [Pi.Alert](https://github.com/pucherot/Pi.Alert) instance and displays it on the built-in 320×240 TFT. **Touch the screen** left or right to cycle through seven display modes.
+Fetches live network data from your local [Pi.Alert](https://github.com/pucherot/Pi.Alert) instance and displays it on the built-in 320×240 TFT. **Touch the screen** left or right to cycle through 12 display modes.
 
 ![Mode 0 — Dashboard](IMG_20260222_160903.jpg)
-*Mode 0: Dashboard — total devices, online/offline counts, new/down device alerts, last scan time*
+*Mode 0: Dashboard — total devices, online/offline counts, new device alert count, last scan time*
 
 ---
 
 ## What It Shows
 
-| Mode | Description |
-|------|-------------|
-| **0 — Dashboard** | Total devices, online, offline, new devices count, down devices count, last scan time |
-| **1 — Online Devices** | All currently online devices — last IP octet + name, 2-column layout (up to 20) |
-| **2 — Offline Devices** | All currently offline devices — same layout |
-| **3 — New Devices** | Unknown/unacknowledged devices — IP, name, vendor (red alert if any) |
-| **4 — Down Devices** | Monitored devices that are currently offline and flagged as critical — shown in red |
-| **5 — Recent Events** | Live feed of the last 15 connect/disconnect events — time, event type, device name |
-| **6 — IP History** | Last 20 distinct MAC→IP pairs seen on the network — name on top, full MAC below (yellow if named, grey if unknown). Useful for tracking devices with changing IPs (e.g. ESP32s, phones) |
+| Mode | Name | Description |
+|------|------|-------------|
+| **0** | **Dashboard** | Total devices, online now, offline, new devices count, last scan time |
+| **1** | **Online Devices** | All currently online devices — last IP octet + name, 2-column layout |
+| **2** | **Offline Devices** | All currently offline devices — same 2-column layout |
+| **3** | **New Devices** | Unknown/unacknowledged devices — IP, name, vendor (red alert banner if any) |
+| **4** | **Down Devices** | Monitored devices currently offline and flagged "Alert when down" — shown in red |
+| **5** | **Recent Events** | Live feed of the last 20 connect/disconnect/IP-change events |
+| **6** | **IP History** | Last 20 distinct MAC→IP pairs — name (yellow) + full MAC (grey) |
+| **7** | **Uptime Bars** | Proportional uptime bars for all online devices, shortest first — scaled to 2 weeks max |
+| **8** | **Presence Bars** | Days each device was seen in the last 30 days — green ≥20d, yellow 7–19d, grey <7d |
+| **9** | **ESP Devices** | All CYD ESP32 devices on your network that respond to `/identify` — IP, name, version, RSSI, uptime |
+| **10** | **ARP Watch** | ARP anomalies detected by `arpwatch_daemon.py` — GATEWAY_MAC / ARP_SPOOF / MAC_CHANGE |
+| **11** | **ARP Status** | Full ARP health dashboard — gateway MAC match, rate, top talkers, last events |
+
+---
+
+## Screenshots
 
 ![Mode 1 — Online Devices](IMG_20260222_160929.jpg)
-*Mode 1: Online Devices — 2-column layout, up to 20 devices, last IP octet + device name*
+*Mode 1: Online Devices — 2-column layout, last IP octet + device name*
+
+![Mode 3 — New Devices](IMG_20260222_161106.jpg)
+*Mode 3: New Devices — red alert banner, IP + name + vendor for each unacknowledged device*
+
+![Mode 5 — Recent Events](IMG_20260305_140940.jpg)
+*Mode 5: Recent Events — time, event type (Connect/Disconn/IP Chan), IP, device name*
+
+![Mode 6 — IP History](IMG_20260305_140929.jpg)
+*Mode 6: IP History — device name (yellow) on top, full MAC address below, 2-column layout*
+
+![Mode 7 — Uptime Bars](IMG_20260305_140918.jpg)
+*Mode 7: Uptime Bars — proportional green bar per device, time label (Xm/Xh/Xd), 2 columns of 20*
+
+![Mode 8 — Presence Bars](IMG_20260305_140910.jpg)
+*Mode 8: Presence Bars — days seen in last 30 days, green/yellow/grey by frequency*
+
+![Mode 9 — ESP Devices](IMG_20260305_140857.jpg)
+*Mode 9: ESP Devices — probes all known IPs for /identify, shows name, firmware version, RSSI, uptime*
+
+![Mode 11 — ARP Status](IMG_20260305_140709.jpg)
+*Mode 11: ARP Status — gateway MAC CUR/EXP match, rate, change/dupe counts, top talkers, last events*
 
 ---
 
@@ -32,9 +62,39 @@ Fetches live network data from your local [Pi.Alert](https://github.com/pucherot
 | **Touch right half of screen** | Next mode → |
 | **Touch left half of screen** | ← Previous mode |
 | **Short press BOOT button** | Next mode → |
+| **Hold BOOT button ~1.5 seconds** | Open **Mode Manager** (toggle modes on/off) |
 | **Hold BOOT button 3 seconds** | Restart into WiFi/server setup |
 
-A **blue countdown bar** at the very bottom of the screen drains across over 30 seconds, showing time until the next automatic refresh.
+A **blue countdown bar** at the very bottom of the screen drains left-to-right over 30 seconds, showing time until the next automatic refresh.
+
+---
+
+## Mode Manager (Toggle Modes On/Off)
+
+Hold the **BOOT button for ~1.5 seconds** (release before 3s) to open the Mode Manager. This lets you **disable any modes you don't want** — for example, if you haven't patched the Pi.Alert server yet you can turn off the modes that require it, or if you don't run `arpwatch_daemon.py` you can hide the ARP modes.
+
+```
+MODE MANAGER                    hold BOOT to exit
+[ON ] Pi.Alert
+[ON ] Online Devices
+[ON ] Offline Devices
+[OFF] New Devices
+[OFF] Down Devices
+...
+< prev  center:toggle  next >
+```
+
+| Action in Mode Manager | Result |
+|------------------------|--------|
+| **Touch left third** | Move selection up |
+| **Touch right third** | Move selection down |
+| **Touch center** | Toggle selected mode ON/OFF |
+| **Short press BOOT** | Toggle selected mode ON/OFF |
+| **Hold BOOT ~1.5 seconds** | Save settings and exit |
+
+- Disabled modes are **completely skipped** when cycling left/right with touch or the BOOT button.
+- You **cannot disable the last remaining enabled mode** (at least one is always kept on).
+- Settings are **saved to flash (NVS)** and survive reboots. All modes default to ON on first flash.
 
 ---
 
@@ -59,55 +119,6 @@ A **blue countdown bar** at the very bottom of the screen drains across over 30 
 
 ---
 
-## Display Layout
-
-```
-[ Pi.Alert           192.168.0.105 ]  ← header (mode title + Pi.Alert host)
-[ .IP  DEVICE        .IP  DEVICE   ]  ← column labels (modes 1 & 2)
-[──────────────────────────────────]  ← divider
-
-Mode 0 — Dashboard:
-  ALL DEVICES    ONLINE NOW
-  42             18
-  ──────────────────────────────────
-  OFFLINE        NEW DEVICES
-  22             3
-  ──────────────────────────────────
-  Last scan: 14:32:05
-  ! 2 device(s) marked DOWN
-
-Mode 1/2 — Device list (2 columns, 10 rows each):
-  .5   My-PC            .22  SmartTV
-  .10  Pi-Hole          .25  iPhone
-  ...
-
-Mode 3 — New Devices:
-  3 NEW DEVICES DETECTED
-  .116  (unknown)        Espressif Inc.
-  ...  (green "Network looks clean!" if none)
-
-Mode 4 — Down Devices:
-  .12   NAS-Server       Synology Inc.
-  .31   Security-Cam     Hikvision
-  ...  (green "All monitored devices are up!" if none)
-
-Mode 5 — Recent Events:
-  TIME   TYPE     DEVICE
-  14:32  Connect  My-PC
-  14:30  Disconn  SmartTV
-  ...
-
-Mode 6 — IP History (2 columns, 10 rows each):
-  .IP  NAME  /  MAC        .IP  NAME  /  MAC
-  .119  Pi-Alert            .114  (unknown)
-  10:52:1c:f6:5e:4c         88:57:21:43:fa:ac
-  .110  LAPTOP-ABQTBN9A     .118  (unknown)
-  22:6d:13:0e:32:ea         3c:8a:1f:d7:72:44
-  ...  (named devices in yellow, unknown in grey)
-```
-
----
-
 ## Error Handling
 
 When a fetch fails (network hiccup, Pi.Alert busy):
@@ -125,55 +136,64 @@ When a fetch fails (network hiccup, Pi.Alert busy):
 - **API key** configured in Pi.Alert → **Maintenance** → **API Key**
 - Pi.Alert accessible on your local network via HTTP
 
-### Server Modifications Required
+### Which Modes Require Server Modifications
 
-Three of the six modes use API endpoints that **do not exist** in Pi.Alert by default. You need to add them manually to one PHP file on your Pi.Alert server. See the [Pi.Alert Server Modifications](#pialert-server-modifications) section below.
+Most modes require custom API endpoints added to Pi.Alert's `index.php`. Modes 10 and 11 additionally require the companion `arpwatch_daemon.py` script running on the Pi.
 
 | Mode | Endpoint | Requires modification? |
 |------|----------|------------------------|
 | 0 — Dashboard | `system-status` | No — built-in |
 | 1 — Online | `all-online` | No — built-in |
 | 2 — Offline | `all-offline` | No — built-in |
-| 3 — New Devices | `all-new` | **Yes** |
-| 4 — Down Devices | `all-down` | **Yes** |
-| 5 — Recent Events | `recent-events` | **Yes** |
-| 6 — IP History | `ip-changes` | **Yes** |
+| 3 — New Devices | `all-new` | **Yes — patch index.php** |
+| 4 — Down Devices | `all-down` | **Yes — patch index.php** |
+| 5 — Recent Events | `recent-events` | **Yes — patch index.php** |
+| 6 — IP History | `ip-changes` | **Yes — patch index.php** |
+| 7 — Uptime Bars | `online-uptime` | **Yes — patch index.php** |
+| 8 — Presence Bars | `device-presence` | **Yes — patch index.php** |
+| 9 — ESP Devices | `all-device-ips` | **Yes — patch index.php** |
+| 10 — ARP Watch | `arp-alerts` | **Yes — patch index.php + arpwatch_daemon.py** |
+| 11 — ARP Status | `arp-status` | **Yes — patch index.php + arpwatch_daemon.py** |
+
+> 💡 If you only want basic network monitoring, Modes 0–2 work with a stock Pi.Alert install. Use the [Mode Manager](#mode-manager-toggle-modes-onoff) to disable everything else.
 
 ---
 
 ## Pi.Alert Server Modifications
 
-> ⚠️ This is a one-time change to a single PHP file. It adds three new read-only API endpoints. It does not affect any existing Pi.Alert functionality.
+> ⚠️ This is a one-time change to a single PHP file on your Pi.Alert server. It adds new read-only API endpoints and does not affect any existing Pi.Alert functionality.
 
-The complete modified `index.php` is included in this repo at [`pialert-patch/index.php`](pialert-patch/index.php). You can either copy it directly or apply the changes manually.
+The complete patched `index.php` is included in this repo at [`pialert-patch/index.php`](pialert-patch/index.php). You can either copy it directly or apply the changes manually.
 
 ### Option A — Copy the patched file directly (easiest)
+
+SSH into your Pi.Alert server, then:
 
 ```bash
 # Back up the original
 sudo cp /opt/pialert/front/api/index.php /opt/pialert/front/api/index.php.bak
 
-# Copy the patched version (from this repo)
+# Copy the patched version from this repo (adjust path as needed)
 sudo cp pialert-patch/index.php /opt/pialert/front/api/index.php
 sudo chown www-data:www-data /opt/pialert/front/api/index.php
 ```
 
-> ⚠️ The patched file is based on Pi.Alert as installed from the official repo. If your version has local customisations, use **Option B** instead.
+> ⚠️ The patched file is based on a stock Pi.Alert install from the official repo. If your version has local customisations, use **Option B** to add just the new endpoints manually.
 
 ---
 
 ### Option B — Apply changes manually
 
-#### Step 1 — SSH into your Pi.Alert server
+#### Step 1 — SSH into your Pi.Alert server and open the file
 
 ```bash
 ssh your-username@your-pi-alert-ip
 sudo nano /opt/pialert/front/api/index.php
 ```
 
-#### Step 2 — Add three new cases to the switch block
+#### Step 2 — Add new cases to the switch block
 
-Find the switch block (around line 50) that ends with:
+Find the switch block (around line 50). It will end with something like:
 
 ```php
     case 'all-new':getAllNew();
@@ -181,87 +201,31 @@ Find the switch block (around line 50) that ends with:
     }
 ```
 
-Add the three new cases **before** the closing `}`:
+Add the following cases **before** the closing `}`:
 
 ```php
-    case 'all-new':getAllNew();
-        break;
     case 'all-down':getAllDown();
         break;
     case 'recent-events':getRecentEvents();
         break;
+    case 'ip-changes':getIPChanges();
+        break;
+    case 'online-uptime':getOnlineUptime();
+        break;
+    case 'device-presence':getDevicePresence();
+        break;
+    case 'all-device-ips':getAllDeviceIPs();
+        break;
+    case 'arp-alerts':getArpAlerts();
+        break;
+    case 'arp-status':getArpStatus();
+        break;
     }
 ```
 
-#### Step 3 — Add three new functions
+#### Step 3 — Add the new functions
 
-Find the closing `?>` tag at the very bottom of the file and add these functions **before** it:
-
-```php
-//example curl -k -X POST -F 'api-key=key' -F 'get=all-new' https://url/pialert/api/
-function getAllNew() {
-    global $db;
-    $sql = 'SELECT dev_MAC, dev_Name, dev_Vendor, dev_LastIP, dev_FirstConnection
-            FROM Devices WHERE dev_NewDevice="1"
-            ORDER BY dev_FirstConnection DESC LIMIT 20';
-    $results = $db->query($sql);
-    $devices = array();
-    $i = 0;
-    while ($row = $results->fetchArray()) {
-        $devices[$i] = array(
-            'dev_MAC'             => $row['dev_MAC'],
-            'dev_Name'            => $row['dev_Name'],
-            'dev_Vendor'          => $row['dev_Vendor'],
-            'dev_LastIP'          => $row['dev_LastIP'],
-            'dev_FirstConnection' => $row['dev_FirstConnection']
-        );
-        $i++;
-    }
-    echo json_encode($devices);
-    echo "\n";
-}
-
-//example curl -k -X POST -F 'api-key=key' -F 'get=all-down' https://url/pialert/api/
-function getAllDown() {
-    global $db;
-    $sql = 'SELECT dev_Name, dev_LastIP, dev_Vendor FROM Devices
-            WHERE dev_AlertDeviceDown=1 AND dev_PresentLastScan=0 AND dev_Archived=0
-            ORDER BY dev_Name ASC';
-    $results_array = array();
-    $results = $db->query($sql);
-    $i = 0;
-    while ($row = $results->fetchArray()) {
-        $results_array[$i]['dev_Name']   = $row['dev_Name'];
-        $results_array[$i]['dev_LastIP'] = $row['dev_LastIP'];
-        $results_array[$i]['dev_Vendor'] = $row['dev_Vendor'];
-        $i++;
-    }
-    echo json_encode($results_array);
-    echo "\n";
-}
-
-//example curl -k -X POST -F 'api-key=key' -F 'get=recent-events' https://url/pialert/api/
-function getRecentEvents() {
-    global $db;
-    $sql = 'SELECT e.eve_DateTime, e.eve_EventType, e.eve_IP, d.dev_Name
-            FROM Events e
-            LEFT JOIN Devices d ON e.eve_MAC = d.dev_MAC
-            ORDER BY e.eve_DateTime DESC LIMIT 15';
-    $results_array = array();
-    $results = $db->query($sql);
-    $i = 0;
-    while ($row = $results->fetchArray()) {
-        $results_array[$i]['eve_DateTime']  = $row['eve_DateTime'];
-        $results_array[$i]['eve_EventType'] = $row['eve_EventType'];
-        $results_array[$i]['eve_IP']        = $row['eve_IP'];
-        $results_array[$i]['dev_Name']      = $row['dev_Name'] ? $row['dev_Name'] : 'Unknown';
-        $i++;
-    }
-    echo json_encode($results_array);
-    echo "\n";
-}
-?>
-```
+Find the closing `?>` at the bottom of the file and paste these functions **before** it. The full implementations are in [`pialert-patch/index.php`](pialert-patch/index.php) — copy from there to ensure you have the current versions.
 
 #### Step 4 — Verify the endpoints work
 
@@ -269,12 +233,23 @@ function getRecentEvents() {
 APIKEY="your-api-key-here"
 HOST="your-pi-alert-ip"
 
-curl -s -X POST -F "api-key=$APIKEY" -F "get=all-new"       http://$HOST/pialert/api/
-curl -s -X POST -F "api-key=$APIKEY" -F "get=all-down"      http://$HOST/pialert/api/
-curl -s -X POST -F "api-key=$APIKEY" -F "get=recent-events" http://$HOST/pialert/api/
+curl -s -X POST -F "api-key=$APIKEY" -F "get=all-down"        http://$HOST/pialert/api/
+curl -s -X POST -F "api-key=$APIKEY" -F "get=recent-events"   http://$HOST/pialert/api/
+curl -s -X POST -F "api-key=$APIKEY" -F "get=ip-changes"      http://$HOST/pialert/api/
+curl -s -X POST -F "api-key=$APIKEY" -F "get=online-uptime"   http://$HOST/pialert/api/
+curl -s -X POST -F "api-key=$APIKEY" -F "get=device-presence" http://$HOST/pialert/api/
+curl -s -X POST -F "api-key=$APIKEY" -F "get=all-device-ips"  http://$HOST/pialert/api/
 ```
 
-Each should return a JSON array. `[]` means no devices in that category — that's correct.
+Each should return a JSON array. `[]` means no data in that category — that's correct.
+
+---
+
+### ARP Watch (Modes 10 & 11) — Additional Setup
+
+Modes 10 and 11 require `arpwatch_daemon.py` running on the Pi.Alert host. This is a companion Python daemon that passively monitors ARP traffic, detects anomalies (gateway MAC changes, ARP spoofing, duplicate IPs), and exposes a JSON status endpoint on port 8765 that Pi.Alert's patched `index.php` reads.
+
+The daemon and setup instructions are maintained separately. Without it running, Modes 10 and 11 will show "No ARP data" — use the [Mode Manager](#mode-manager-toggle-modes-onoff) to disable them if you don't need ARP monitoring.
 
 ---
 
@@ -327,12 +302,15 @@ pio device monitor --baud 115200
 CYDPiAlert/
 ├── platformio.ini              # PlatformIO config (board, libs)
 ├── pialert-patch/
-│   └── index.php               # Modified Pi.Alert API file (drop-in replacement)
+│   └── index.php               # Patched Pi.Alert API file (drop-in replacement)
 ├── include/
 │   ├── Portal.h                # Captive portal: WiFi + Pi.Alert credentials, NVS
-│   └── PiAlert.h               # HTTP fetch functions + data structs for all modes
+│   ├── PiAlert.h               # HTTP fetch functions + data structs for modes 0–9
+│   ├── ArpWatch.h              # Fetch functions for Mode 10 (ARP Watch)
+│   ├── ArpStatus.h             # Fetch functions for Mode 11 (ARP Status)
+│   └── CYDIdentity.h           # /identify HTTP endpoint (device self-identification)
 └── src/
-    └── main.cpp                # Display init, mode logic, draw functions, touch + button
+    └── main.cpp                # Display init, all draw functions, touch + button, Mode Manager
 ```
 
 ---
@@ -341,22 +319,26 @@ CYDPiAlert/
 
 | Error on screen | Cause | Fix |
 |----------------|-------|-----|
-| `ERR: Wrong API key` | API key doesn't match Pi.Alert | Re-enter setup, copy key from Pi.Alert → Maintenance → API Key |
+| `ERR: Wrong API key` | API key doesn't match Pi.Alert | Re-enter setup; copy key from Pi.Alert → Maintenance → API Key |
 | `Fetch failed: HTTP 404` | Wrong Pi.Alert host or path | Enter bare IP only, e.g. `192.168.0.105` |
-| `Fetch failed: JSON error` | Missing API endpoint | Follow the Pi.Alert server modification steps above |
-| `Fetch failed: No connection` | WiFi dropped | Retries automatically on next 30s interval |
+| `Fetch failed: JSON error` | Missing API endpoint | Patch Pi.Alert's `index.php` (see above) |
+| `Fetch failed: No connection` | WiFi dropped | Retries automatically on next 30s cycle |
 | `WiFi failed: "YourSSID"` | Wrong SSID or password | Hold BOOT 3s to re-enter setup |
 | Screen stays on "Refreshing..." | Pi.Alert scan still running | Wait — Pi.Alert scans run every 3–5 minutes |
+| Mode 10/11 shows "No ARP data" | `arpwatch_daemon.py` not running | Start the daemon, or disable modes 10/11 via Mode Manager |
 
 ---
 
 ## Notes
 
 - Refresh interval is **30 seconds**. Pi.Alert's ARP scan runs every 3–5 minutes so dashboard counts only change that often.
-- **Mode 3 — New Devices** shows devices Pi.Alert detected but you haven't acknowledged. Clear them in Pi.Alert → Devices.
+- **Mode 3 — New Devices** shows devices Pi.Alert detected but you haven't acknowledged yet. Clear them in Pi.Alert → Devices.
 - **Mode 4 — Down Devices** only shows devices that have `Alert when down` enabled in Pi.Alert device settings. Devices not flagged will appear in Mode 2 (Offline) instead.
-- **Mode 5 — Recent Events** includes all event types: `Connected`, `Disconnected`, `VOIDED - Connected`, etc. `VOIDED` events are normal — Pi.Alert uses them to correct scan anomalies.
-- **Mode 6 — IP History** shows the 20 most recently seen MAC→IP pairs grouped by unique combination, ordered newest first. Each row shows the device name (yellow) or `(unknown)` (grey) on the top line, with the full MAC address dimmed below. Use this to correlate unknown devices (ESP32s, phones, etc.) to their MAC addresses and then assign names in Pi.Alert.
+- **Mode 5 — Recent Events** includes all event types: `Connected`, `Disconnected`, `IP Change`, `VOIDED`, etc. `VOIDED` events are normal — Pi.Alert uses them to correct scan anomalies.
+- **Mode 6 — IP History** shows the 20 most recently seen MAC→IP pairs, ordered newest first. Yellow = named device, grey = unknown. Useful for correlating ESP32s, phones, or other devices that change IPs to their MAC addresses.
+- **Mode 7 — Uptime Bars** shows how long each currently-online device has been continuously present. Scale caps at 2 weeks — any device online longer fills the bar completely.
+- **Mode 8 — Presence Bars** shows device regularity over 30 days. Green = very regular (20+ days), yellow = occasional (7–19 days), grey = rarely seen (<7 days).
+- **Mode 9 — ESP Devices** probes every known IP on your network for a `/identify` HTTP endpoint. Any CYD-based project (CYDPiHole, CYDEbayTicker, etc.) that implements the endpoint will appear here with name, firmware version, RSSI, and uptime.
 - Compatible with the original [Pi.Alert by pucherot](https://github.com/pucherot/Pi.Alert). Forks (Pi.Alert CE, IPAM) may have different API paths or database schemas.
 
 ---
