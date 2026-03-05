@@ -14,6 +14,9 @@ SCAN_INTERVAL  = 35    # seconds to sleep between scan cycles
 BLE_FILE       = '/tmp/ble_devices.json'
 MAX_DEVICES    = 20    # keep only top-N by RSSI
 
+# Strip ANSI terminal escape codes (bluetoothctl wraps tags like [CHG] in them)
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[mK]|\x01|\x02')
+
 # OUI prefixes (first 8 chars of MAC, lowercase) associated with cheap
 # BLE modules commonly found in card skimmers and covert trackers.
 SKIMMER_OUI = {
@@ -36,8 +39,8 @@ SUSPICIOUS_NAMES = [
 # BLE scan via bluetoothctl
 # ---------------------------------------------------------------------------
 def scan_ble():
-    """Open bluetoothctl, enable scan for SCAN_DURATION, collect devices."""
-    devices = {}   # mac → {'name': str, 'rssi': int}
+    """Scan for BLE devices using bluetoothctl, return dict of mac → {name, rssi}."""
+    devices = {}
 
     try:
         proc = subprocess.Popen(
@@ -46,46 +49,51 @@ def scan_ble():
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            bufsize=1,
         )
+        # Start scanning, wait, then list devices + quit
         proc.stdin.write('scan on\n')
         proc.stdin.flush()
+        time.sleep(SCAN_DURATION)
+        proc.stdin.write('devices\n')
+        proc.stdin.flush()
+        time.sleep(0.5)
+        proc.stdin.write('scan off\n')
+        proc.stdin.flush()
+        time.sleep(0.3)
+        proc.stdin.write('quit\n')
+        proc.stdin.flush()
 
-        deadline = time.time() + SCAN_DURATION
-        while time.time() < deadline:
-            try:
-                line = proc.stdout.readline()
-                if not line:
-                    break
+        try:
+            out, _ = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, _ = proc.communicate()
 
-                # [NEW] Device AA:BB:CC:DD:EE:FF  Name
-                m = re.search(r'\[NEW\] Device ([0-9A-Fa-f:]{17})\s+(.*)', line)
+        for raw_line in out.splitlines():
+            line = _ANSI_RE.sub('', raw_line)   # strip escape codes first
+
+            # Name: only from [NEW] or plain "Device MAC name" lines — NOT [CHG]/[DEL] property updates
+            if '[CHG]' not in line and '[DEL]' not in line:
+                m = re.search(r'Device ([0-9A-Fa-f:]{17})\s+(.*)', line)
                 if m:
                     mac  = m.group(1).lower()
                     name = m.group(2).strip()
+                    if re.match(r'^[0-9A-Fa-f:]{17}$', name):
+                        name = ''
                     if mac not in devices:
                         devices[mac] = {'name': name, 'rssi': -100}
-                    elif name:
+                    elif name and name != mac:
                         devices[mac]['name'] = name
 
-                # [CHG] Device AA:BB:CC:DD:EE:FF RSSI: -75
-                m = re.search(r'Device ([0-9A-Fa-f:]{17}).*RSSI:\s*([-\d]+)', line)
-                if m:
-                    mac  = m.group(1).lower()
-                    rssi = int(m.group(2))
-                    if mac not in devices:
-                        devices[mac] = {'name': '', 'rssi': rssi}
-                    else:
-                        devices[mac]['rssi'] = rssi
-
-            except Exception:
-                break
-
-        proc.stdin.write('scan off\n')
-        proc.stdin.write('quit\n')
-        proc.stdin.flush()
-        proc.terminate()
-        proc.wait(timeout=3)
+            # RSSI updates: "[CHG] Device MAC RSSI: -75"
+            m = re.search(r'Device ([0-9A-Fa-f:]{17}).*RSSI:\s*([-\d]+)', line)
+            if m:
+                mac  = m.group(1).lower()
+                rssi = int(m.group(2))
+                if mac not in devices:
+                    devices[mac] = {'name': '', 'rssi': rssi}
+                else:
+                    devices[mac]['rssi'] = rssi
 
     except FileNotFoundError:
         print('[ble_scan_daemon] bluetoothctl not found', flush=True)

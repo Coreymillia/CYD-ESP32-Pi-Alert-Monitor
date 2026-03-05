@@ -14,7 +14,7 @@ INTERFACE      = 'wlan0'
 SCAN_INTERVAL  = 30          # seconds between scans
 SCAN_FILE      = '/tmp/wifi_scan.json'
 SHADY_FILE     = '/tmp/wifi_shady.json'
-SHADY_THRESHOLD = 25         # score >= this → include in shady list
+SHADY_THRESHOLD = 15         # score >= this → include in shady list
 
 # SSID fragments that raise suspicion (lowercase match)
 SUSPICIOUS_SSID_FRAGMENTS = [

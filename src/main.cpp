@@ -47,7 +47,6 @@ static unsigned long lastTouchTime = 0;
 #include "PiAlert.h"
 #include "ArpWatch.h"
 #include "ArpStatus.h"
-#include "WifiMonitor.h"
 #include "WifiScan.h"
 #include "BleScan.h"
 
@@ -73,12 +72,10 @@ static unsigned long lastTouchTime = 0;
 #define MODE_ESP        9
 #define MODE_ARP        10
 #define MODE_ARP_STATUS 11
-#define MODE_WIFI_STATUS 12
-#define MODE_WIFI_DETAIL 13
-#define MODE_WIFI_SCAN   14
-#define MODE_WIFI_SHADY  15
-#define MODE_BLE         16
-#define NUM_MODES        17
+#define MODE_WIFI_SCAN   12
+#define MODE_WIFI_SHADY  13
+#define MODE_BLE         14
+#define NUM_MODES        15
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
@@ -97,8 +94,6 @@ static const char *modeTitle[] = {
   "ESP Devices",
   "ARP Watch",
   "ARP Status",
-  "WiFi Status",
-  "WiFi Detail",
   "WiFi AP Scan",
   "Shady Networks",
   "BLE Devices"
@@ -218,38 +213,6 @@ void drawChrome() {
       gfx->print(arp_status_data.status);
     } else {
       gfx->setCursor(2, COLHDR_Y + 1); gfx->print("ARP STATUS");
-    }
-  } else if (currentMode == MODE_WIFI_STATUS) {
-    if (wifi_status_data.valid) {
-      uint16_t sc = (strcmp(wifi_status_data.status, "anomaly") == 0) ? COLOR_NEW  :
-                    (strcmp(wifi_status_data.status, "warning") == 0) ? 0xFFE0 : COLOR_ONLINE;
-      gfx->setTextColor(sc);
-      gfx->setCursor(2, COLHDR_Y + 1);
-      gfx->print(wifi_status_data.status);
-      gfx->setTextColor(COLOR_DIM);
-      gfx->setCursor(50, COLHDR_Y + 1);
-      gfx->print(wifi_status_data.status_reason);
-    } else {
-      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("WiFi STATUS");
-    }
-  } else if (currentMode == MODE_WIFI_DETAIL) {
-    if (wifi_detail_data.valid) {
-      gfx->setCursor(2, COLHDR_Y + 1);
-      gfx->print("ROGUES:");
-      uint16_t rc = wifi_detail_data.rogue_ap_count > 0 ? COLOR_NEW : COLOR_ONLINE;
-      gfx->setTextColor(rc);
-      char rbuf[4]; snprintf(rbuf, sizeof(rbuf), "%d", wifi_detail_data.rogue_ap_count);
-      gfx->setCursor(56, COLHDR_Y + 1);
-      gfx->print(rbuf);
-      gfx->setTextColor(COLOR_DIM);
-      gfx->setCursor(80, COLHDR_Y + 1);
-      gfx->print("  PROBE/MIN:");
-      gfx->setTextColor(wifi_detail_data.probe_spike ? 0xFFE0 : COLOR_TEXT);
-      char pbuf[6]; snprintf(pbuf, sizeof(pbuf), "%d", wifi_detail_data.probe_rate);
-      gfx->setCursor(176, COLHDR_Y + 1);
-      gfx->print(pbuf);
-    } else {
-      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("WiFi DETAIL");
     }
   } else if (currentMode == MODE_WIFI_SCAN) {
     if (wifi_scan_data.valid) {
@@ -1085,245 +1048,7 @@ void drawArpStatus() {
 }
 
 // ---------------------------------------------------------------------------
-// Mode 12 — WiFi Status: RF-layer health summary
-// ---------------------------------------------------------------------------
-void drawWifiStatus() {
-  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
-
-  if (!wifi_status_data.valid) {
-    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
-    gfx->setCursor(4, ROWS_Y + 7);
-    gfx->print("No data. Is wifi_monitor_daemon.py running?");
-    return;
-  }
-
-  WifiStatusData &d = wifi_status_data;
-
-  // ── Status banner ─────────────────────────────────────────────────────────
-  bool isAnomaly = (strcmp(d.status, "anomaly") == 0);
-  bool isWarning = (strcmp(d.status, "warning") == 0);
-  uint16_t sBg = isAnomaly ? 0x8000 : isWarning ? 0x8420 : 0x0280;
-  uint16_t sFg = isAnomaly ? COLOR_NEW : isWarning ? 0xFFE0 : COLOR_ONLINE;
-  const char *sLabel = isAnomaly ? "!! ANOMALY !!" : isWarning ? "! WARNING" : "OK";
-
-  gfx->fillRect(0, ROWS_Y, gfx->width(), 18, sBg);
-  gfx->setTextColor(sFg); gfx->setTextSize(1);
-  gfx->setCursor(4, ROWS_Y + 5); gfx->print(sLabel);
-  gfx->setTextColor(0xC618);
-  gfx->setCursor(96, ROWS_Y + 5); gfx->print(d.status_reason);
-
-  // If still learning, show a countdown bar instead of normal rows
-  if (d.learning) {
-    int barW = (d.learn_ends_in > 0)
-               ? (int)((long)d.learn_ends_in * gfx->width() / 60)
-               : 0;
-    gfx->fillRect(0,    ROWS_Y + 20, barW,                4, 0xFFE0);
-    gfx->fillRect(barW, ROWS_Y + 20, gfx->width() - barW, 4, 0x2000);
-    gfx->setTextColor(0xFFE0); gfx->setCursor(4, ROWS_Y + 33);
-    char lbuf[32];
-    snprintf(lbuf, sizeof(lbuf), "LEARNING  %ds remaining", d.learn_ends_in);
-    gfx->print(lbuf);
-    gfx->setTextColor(COLOR_DIM); gfx->setCursor(4, ROWS_Y + 50);
-    gfx->print("All visible APs are being whitelisted.");
-    gfx->setCursor(4, ROWS_Y + 63);
-    gfx->print("Move around so all your APs are seen.");
-    return;
-  }
-
-  // ── Data rows ─────────────────────────────────────────────────────────────
-  int y = ROWS_Y + 22;
-
-  // DEAUTHS
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(4, y); gfx->print("DEAUTHS");
-  gfx->setTextColor(d.deauth_5min > 0 ? COLOR_NEW : COLOR_ONLINE);
-  char dbuf[8]; snprintf(dbuf, sizeof(dbuf), "%d", d.deauth_count);
-  gfx->setCursor(76, y); gfx->print(dbuf);
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(130, y);
-  if (d.last_deauth_ts[0]) {
-    gfx->print("LAST:");
-    gfx->setTextColor(COLOR_TEXT); gfx->setCursor(170, y);
-    gfx->print(d.last_deauth_ts);
-  } else {
-    gfx->print("LAST: none");
-  }
-  y += 22;
-
-  // ROGUE APS
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(4, y); gfx->print("ROGUE APS");
-  gfx->setTextColor(d.rogue_ap_count > 0 ? COLOR_NEW : COLOR_ONLINE);
-  char rbuf[4]; snprintf(rbuf, sizeof(rbuf), "%d", d.rogue_ap_count);
-  gfx->setCursor(76, y); gfx->print(rbuf);
-  if (d.rogue_ap_count == 0) {
-    gfx->setTextColor(COLOR_ONLINE); gfx->setCursor(100, y); gfx->print("None detected");
-  } else {
-    gfx->setTextColor(COLOR_NEW); gfx->setCursor(100, y); gfx->print("!! See WiFi Detail !!");
-  }
-  y += 22;
-
-  // PROBES/MIN
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(4, y); gfx->print("PROBES/MIN");
-  gfx->setTextColor(d.probe_spike ? 0xFFE0 : COLOR_TEXT);
-  char pbuf[8]; snprintf(pbuf, sizeof(pbuf), "%d", d.probe_rate);
-  gfx->setCursor(76, y); gfx->print(pbuf);
-  if (d.probe_spike) {
-    gfx->setTextColor(0xFFE0); gfx->setCursor(130, y); gfx->print("SPIKE!");
-  }
-  y += 22;
-
-  // KNOWN APS
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(4, y); gfx->print("KNOWN APS");
-  gfx->setTextColor(COLOR_TEXT);
-  char kbuf[4]; snprintf(kbuf, sizeof(kbuf), "%d", d.known_ap_count);
-  gfx->setCursor(76, y); gfx->print(kbuf);
-  if (d.hidden_ssid_count > 0) {
-    gfx->setTextColor(COLOR_DIM); gfx->setCursor(130, y); gfx->print("HIDDEN:");
-    gfx->setTextColor(0xFFE0);
-    char hbuf[4]; snprintf(hbuf, sizeof(hbuf), "%d", d.hidden_ssid_count);
-    gfx->setCursor(190, y); gfx->print(hbuf);
-  }
-  y += 22;
-
-  // 5-MIN DEAUTHS
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(4, y); gfx->print("DEAUTH/5m");
-  gfx->setTextColor(d.deauth_5min >= 10 ? COLOR_NEW :
-                    d.deauth_5min >= 3  ? 0xFFE0 : COLOR_ONLINE);
-  char d5buf[4]; snprintf(d5buf, sizeof(d5buf), "%d", d.deauth_5min);
-  gfx->setCursor(76, y); gfx->print(d5buf);
-}
-
-// ---------------------------------------------------------------------------
-// Mode 13 — WiFi Detail: rogue APs, channel map, last deauths, top BSSIDs
-// ---------------------------------------------------------------------------
-void drawWifiDetail() {
-  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
-
-  if (!wifi_detail_data.valid) {
-    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
-    gfx->setCursor(4, ROWS_Y + 7);
-    gfx->print("No data. Is wifi_monitor_daemon.py running?");
-    return;
-  }
-
-  WifiDetailData &d = wifi_detail_data;
-  int y = ROWS_Y;
-  gfx->setTextSize(1);
-
-  // ── Status banner ─────────────────────────────────────────────────────────
-  bool isAnomaly = (strcmp(d.status, "anomaly") == 0);
-  bool isWarning = (strcmp(d.status, "warning") == 0);
-  uint16_t sBg = isAnomaly ? 0x8000 : isWarning ? 0x8420 : 0x0280;
-  uint16_t sFg = isAnomaly ? COLOR_NEW : isWarning ? 0xFFE0 : COLOR_ONLINE;
-  gfx->fillRect(0, y, gfx->width(), 14, sBg);
-  gfx->setTextColor(sFg); gfx->setCursor(4, y + 3);
-  gfx->print(isAnomaly ? "!! ANOMALY !!" : isWarning ? "! WARNING" : "OK");
-  y += 16;
-
-  // ── Rogue APs ─────────────────────────────────────────────────────────────
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("ROGUE APS");
-  gfx->setTextColor(d.rogue_ap_count > 0 ? COLOR_NEW : COLOR_ONLINE);
-  char rcnt[4]; snprintf(rcnt, sizeof(rcnt), "(%d)", d.rogue_ap_count);
-  gfx->setCursor(62, y);  gfx->print(rcnt);
-  y += 10;
-
-  if (d.rogue_ap_count == 0) {
-    gfx->setTextColor(COLOR_ONLINE); gfx->setCursor(2, y);
-    gfx->print("None detected - network looks clean!");
-    y += 10;
-  } else {
-    int show = d.rogue_ap_count < 3 ? d.rogue_ap_count : 3;
-    for (int i = 0; i < show; i++) {
-      WifiRogueAP &r = d.rogue_aps[i];
-      // Line 1: BSSID  chX  rssi
-      gfx->setTextColor(COLOR_NEW); gfx->setCursor(2, y);
-      gfx->print(r.bssid);
-      gfx->setTextColor(COLOR_DIM);
-      char cbuf[8]; snprintf(cbuf, sizeof(cbuf), " ch%d", r.channel);
-      gfx->print(cbuf);
-      char rssbuf[8]; snprintf(rssbuf, sizeof(rssbuf), " %ddBm", r.rssi);
-      gfx->print(rssbuf);
-      y += 9;
-      // Line 2: SSID or [hidden]
-      gfx->setTextColor(0x4208); gfx->setCursor(2, y);
-      gfx->print(r.hidden ? "[hidden SSID]" : (r.ssid[0] ? r.ssid : "(no SSID)"));
-      y += 10;
-    }
-  }
-
-  // ── Channel map ───────────────────────────────────────────────────────────
-  gfx->drawFastHLine(0, y, gfx->width(), COLOR_DIM); y += 3;
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("CHANNEL MAP  1-13");
-  y += 9;
-
-  int maxAct = 1;
-  for (int i = 1; i <= 13; i++) if (d.channel_map[i] > maxAct) maxAct = d.channel_map[i];
-  const int barMaxH = 12;
-  const int slotW   = gfx->width() / 13;  // ~24px
-  for (int ch = 1; ch <= 13; ch++) {
-    int x    = (ch - 1) * slotW;
-    int barH = (d.channel_map[ch] > 0)
-               ? max(1, (int)((long)d.channel_map[ch] * barMaxH / maxAct))
-               : 0;
-    uint16_t barCol = (d.channel_map[ch] > 0) ? 0x07FF : COLOR_DIM;
-    gfx->fillRect(x + 2, y + (barMaxH - barH), slotW - 3, barH, barCol);
-    gfx->fillRect(x + 2, y, slotW - 3, barMaxH - barH, RGB565_BLACK);
-    char cnum[3]; snprintf(cnum, sizeof(cnum), "%d", ch);
-    gfx->setTextColor(COLOR_DIM); gfx->setCursor(x + 2, y + barMaxH + 1); gfx->print(cnum);
-  }
-  y += barMaxH + 9;
-
-  // ── Last deauth ───────────────────────────────────────────────────────────
-  gfx->drawFastHLine(0, y, gfx->width(), COLOR_DIM); y += 3;
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("LAST DEAUTH");
-  y += 9;
-
-  if (d.deauth_count == 0) {
-    gfx->setTextColor(COLOR_ONLINE); gfx->setCursor(2, y); gfx->print("None");
-    y += 9;
-  } else {
-    WifiDeauth &dv = d.recent_deauths[d.deauth_count - 1];
-    gfx->setTextColor(COLOR_NEW); gfx->setCursor(2, y);
-    gfx->print(dv.ts);
-    gfx->setTextColor(COLOR_DIM); gfx->setCursor(56, y);
-    char rbuf[12]; snprintf(rbuf, sizeof(rbuf), "reason:%d", dv.reason);
-    gfx->print(rbuf);
-    y += 9;
-    gfx->setTextColor(0x4208); gfx->setCursor(2, y);
-    gfx->print(dv.src);
-    gfx->setTextColor(COLOR_DIM); gfx->setCursor(112, y); gfx->print("->");
-    gfx->setTextColor(0x4208); gfx->setCursor(130, y);
-    gfx->print(dv.dst);
-    y += 9;
-  }
-
-  // ── Top BSSIDs ────────────────────────────────────────────────────────────
-  gfx->drawFastHLine(0, y, gfx->width(), COLOR_DIM); y += 3;
-  gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("TOP BSSIDS");
-  y += 9;
-
-  int maxCnt = 1;
-  for (int i = 0; i < d.bssid_count; i++) if (d.top_bssids[i].count > maxCnt) maxCnt = d.top_bssids[i].count;
-  const int bBarMaxW = 90;
-  int show = d.bssid_count < 4 ? d.bssid_count : 4;
-  for (int i = 0; i < show; i++) {
-    if (y > gfx->height() - 9) break;
-    WifiBssid &b = d.top_bssids[i];
-    gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y);
-    // Show last 3 octets of BSSID to save space
-    const char *shortBssid = strlen(b.bssid) >= 8 ? b.bssid + 9 : b.bssid;
-    gfx->print(shortBssid);
-    int bw = max(1, (int)((long)b.count * bBarMaxW / maxCnt));
-    gfx->fillRect(92, y, bw, 7, 0x2945);
-    gfx->fillRect(92 + bw, y, bBarMaxW - bw, 7, RGB565_BLACK);
-    char cntbuf[8]; snprintf(cntbuf, sizeof(cntbuf), "%d", b.count);
-    gfx->setTextColor(COLOR_TEXT);
-    gfx->setCursor(gfx->width() - (int)strlen(cntbuf) * 6 - 2, y);
-    gfx->print(cntbuf);
-    y += 9;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Mode 14 — WiFi AP Scan: sorted list of visible access points
+// Mode 12 — WiFi AP Scan: sorted list of visible access points
 // ---------------------------------------------------------------------------
 void drawWifiScan() {
   gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
@@ -1378,7 +1103,7 @@ void drawWifiScan() {
 }
 
 // ---------------------------------------------------------------------------
-// Mode 15 — Shady Networks: scored list of suspicious nearby APs
+// Mode 13 — Shady Networks: scored list of suspicious nearby APs
 // ---------------------------------------------------------------------------
 void drawWifiShady() {
   gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
@@ -1444,7 +1169,7 @@ void drawWifiShady() {
 }
 
 // ---------------------------------------------------------------------------
-// Mode 16 — BLE Devices: nearby Bluetooth LE devices + skimmer flags
+// Mode 14 — BLE Devices: nearby Bluetooth LE devices + skimmer flags
 // ---------------------------------------------------------------------------
 void drawBleDevices() {
   gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
@@ -1556,8 +1281,6 @@ void refreshDisplay() {
   if (currentMode == MODE_PRESENCE)  ok = paFetchPresence();
   if (currentMode == MODE_ARP)         ok = paFetchArpAlerts();
   if (currentMode == MODE_ARP_STATUS)  ok = paFetchArpStatus();
-  if (currentMode == MODE_WIFI_STATUS) ok = paFetchWifiStatus();
-  if (currentMode == MODE_WIFI_DETAIL) ok = paFetchWifiDetail();
   if (currentMode == MODE_WIFI_SCAN)   ok = paFetchWifiScan();
   if (currentMode == MODE_WIFI_SHADY)  ok = paFetchWifiShady();
   if (currentMode == MODE_BLE)         ok = paFetchBleDevices();
@@ -1576,8 +1299,6 @@ void refreshDisplay() {
     if (currentMode == MODE_PRESENCE)  drawPresenceBars();
     if (currentMode == MODE_ARP)         drawArpAlerts();
     if (currentMode == MODE_ARP_STATUS)  drawArpStatus();
-    if (currentMode == MODE_WIFI_STATUS) drawWifiStatus();
-    if (currentMode == MODE_WIFI_DETAIL) drawWifiDetail();
     if (currentMode == MODE_WIFI_SCAN)   drawWifiScan();
     if (currentMode == MODE_WIFI_SHADY)  drawWifiShady();
     if (currentMode == MODE_BLE)         drawBleDevices();
@@ -1607,7 +1328,7 @@ void refreshDisplay() {
 static void loadModeEnabled() {
   Preferences prefs;
   prefs.begin("cydpialert", true);
-  uint32_t mask = prefs.getUInt("modemask32", 0x1FFFF);
+  uint32_t mask = prefs.getUInt("modemask32", 0x7FFF);
   prefs.end();
   for (int i = 0; i < NUM_MODES; i++)
     modeEnabled[i] = (mask >> i) & 1;
