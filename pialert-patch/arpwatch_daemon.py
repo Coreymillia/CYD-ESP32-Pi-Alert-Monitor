@@ -79,6 +79,7 @@ _stats = {
     "gateway_mac_current":  "",
     "gateway_mac_expected": "",
     "status":               "ok",
+    "status_reason":        "starting up",
     "last_arp_ts":          "",
     "arp_rate":             0.0,
     "duplicate_arp_count":  0,
@@ -162,19 +163,32 @@ def _writer_thread():
                 _rate_win.popleft()
             rate = float(len(_rate_win))  # packets in last 60 s = pkt/min
 
-            # Compute status
+            # Compute status + reason
             cur     = _stats["gateway_mac_current"]
             exp     = _stats["gateway_mac_expected"]
             changes = _stats["gateway_mac_changes"]
             dupes   = _stats["duplicate_arp_count"]
-            if changes > 0 or (cur and exp and cur != exp) or rate > ANOMALY_RATE:
+            if changes > 0:
                 status = "anomaly"
-            elif rate > WARN_RATE or dupes > 0:
+                reason = f"GW MAC changed {changes}x"
+            elif cur and exp and cur != exp:
+                status = "anomaly"
+                reason = f"GW MAC mismatch"
+            elif rate > ANOMALY_RATE:
+                status = "anomaly"
+                reason = f"ARP flood {rate:.0f}/min"
+            elif rate > WARN_RATE:
                 status = "warning"
+                reason = f"high rate {rate:.0f}/min"
+            elif dupes > 0:
+                status = "warning"
+                reason = f"{dupes} duplicate ARPs"
             else:
                 status = "ok"
-            _stats["status"]   = status
-            _stats["arp_rate"] = round(rate, 1)
+                reason = "normal"
+            _stats["status"]        = status
+            _stats["status_reason"] = reason
+            _stats["arp_rate"]      = round(rate, 1)
 
             # Build top-talkers list
             top = sorted(_talkers.items(), key=lambda x: x[1], reverse=True)

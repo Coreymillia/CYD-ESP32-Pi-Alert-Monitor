@@ -6,10 +6,6 @@
 
 #include <ArduinoJson.h>
 
-// Rate thresholds (must match arpwatch_daemon.py tunables)
-#define WARN_RATE    20    // pkt/min → warning
-#define ANOMALY_RATE 100   // pkt/min → anomaly
-
 // ---------------------------------------------------------------------------
 // Structs
 // ---------------------------------------------------------------------------
@@ -20,6 +16,7 @@ struct ArpStatusData {
   char gateway_mac_cur[18];   // "aa:bb:cc:dd:ee:ff"  (current)
   char gateway_mac_exp[18];   // "aa:bb:cc:dd:ee:ff"  (expected / truth anchor)
   char status[10];            // "ok" | "warning" | "anomaly"
+  char status_reason[40];     // human-readable reason, e.g. "ARP flood 1588/min"
   char last_arp_ts[20];       // "YYYY-MM-DD HH:MM:SS"
   float arp_rate;             // packets per minute (rolling 60 s)
   int  duplicate_count;       // lifetime duplicate-ARP / MAC-collision count
@@ -81,6 +78,7 @@ static bool paFetchArpStatus() {
   strncpy(arp_status_data.gateway_mac_cur, doc["gateway_mac_current"] | "",         sizeof(arp_status_data.gateway_mac_cur) - 1);
   strncpy(arp_status_data.gateway_mac_exp, doc["gateway_mac_expected"]| "",         sizeof(arp_status_data.gateway_mac_exp) - 1);
   strncpy(arp_status_data.status,          st,                                       sizeof(arp_status_data.status)          - 1);
+  strncpy(arp_status_data.status_reason,   doc["status_reason"]       | "",         sizeof(arp_status_data.status_reason)   - 1);
   strncpy(arp_status_data.last_arp_ts,     doc["last_arp_ts"]         | "",         sizeof(arp_status_data.last_arp_ts)     - 1);
   strncpy(arp_status_data.last_anomaly,    doc["last_anomaly"]        | "none",     sizeof(arp_status_data.last_anomaly)    - 1);
   strncpy(arp_status_data.last_anomaly_ts, doc["last_anomaly_ts"]     | "",         sizeof(arp_status_data.last_anomaly_ts) - 1);
@@ -90,6 +88,7 @@ static bool paFetchArpStatus() {
   arp_status_data.gateway_mac_cur[sizeof(arp_status_data.gateway_mac_cur)-1] = '\0';
   arp_status_data.gateway_mac_exp[sizeof(arp_status_data.gateway_mac_exp)-1] = '\0';
   arp_status_data.status[sizeof(arp_status_data.status)-1]                   = '\0';
+  arp_status_data.status_reason[sizeof(arp_status_data.status_reason)-1]     = '\0';
   arp_status_data.last_arp_ts[sizeof(arp_status_data.last_arp_ts)-1]         = '\0';
   arp_status_data.last_anomaly[sizeof(arp_status_data.last_anomaly)-1]       = '\0';
   arp_status_data.last_anomaly_ts[sizeof(arp_status_data.last_anomaly_ts)-1] = '\0';

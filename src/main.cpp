@@ -957,8 +957,8 @@ void drawArpStatus() {
   // ARP rate + last ARP timestamp
   char rateBuf[12]; snprintf(rateBuf, sizeof(rateBuf), "%.1f/m", arp_status_data.arp_rate);
   gfx->setTextColor(COLOR_DIM);  gfx->setCursor(2, y);   gfx->print("rate:");
-  gfx->setTextColor(arp_status_data.arp_rate > ANOMALY_RATE ? COLOR_NEW :
-                    arp_status_data.arp_rate > WARN_RATE     ? COLOR_WARN : COLOR_ONLINE);
+  gfx->setTextColor(strcmp(arp_status_data.status, "anomaly") == 0 ? COLOR_NEW :
+                    strcmp(arp_status_data.status, "warning") == 0 ? COLOR_WARN : COLOR_ONLINE);
   gfx->setCursor(36, y);  gfx->print(rateBuf);
   gfx->setTextColor(COLOR_DIM);  gfx->setCursor(100, y); gfx->print("last:");
   char arpTs[9] = "--:--:--";
@@ -979,6 +979,14 @@ void drawArpStatus() {
     char anomTs[6]; strncpy(anomTs, arp_status_data.last_anomaly_ts + 11, 5); anomTs[5] = '\0';
     gfx->setTextColor(COLOR_DIM); gfx->setCursor(272, y); gfx->print(anomTs);
   }
+  y += 11;
+
+  // Status reason row — explains why status is ok/warning/anomaly
+  bool notOk = (strcmp(arp_status_data.status, "ok") != 0);
+  gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("why:");
+  gfx->setTextColor(notOk ? (strcmp(arp_status_data.status, "anomaly") == 0 ? COLOR_NEW : COLOR_WARN) : COLOR_ONLINE);
+  char reasonBuf[38]; strncpy(reasonBuf, arp_status_data.status_reason, 37); reasonBuf[37] = '\0';
+  gfx->setCursor(30, y); gfx->print(reasonBuf[0] ? reasonBuf : "normal");
   y += 11;
 
   // ── Top Talkers ──────────────────────────────────────────────────────────
