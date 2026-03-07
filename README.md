@@ -1,7 +1,7 @@
 # CYDPiAlert
 
 A **Pi.Alert network presence monitor** running on the **CYD (Cheap Yellow Display)** ESP32 board.  
-Fetches live network data from your local [Pi.Alert](https://github.com/pucherot/Pi.Alert) instance and displays it on the built-in 320×240 TFT. **Touch the screen** left or right to cycle through 12 display modes.
+Fetches live network data from your local [Pi.Alert](https://github.com/pucherot/Pi.Alert) instance and displays it on the built-in 320×240 TFT. Optionally integrates with **Pi-hole v6** for live DNS stats. **Touch the screen** left or right to cycle through display modes.
 
 ![Mode 0 — Dashboard](IMG_20260222_160903.jpg)
 *Mode 0: Dashboard — total devices, online/offline counts, new device alert count, last scan time*
@@ -27,6 +27,8 @@ Fetches live network data from your local [Pi.Alert](https://github.com/pucherot
 | **12** | **WiFi AP Scan** | Live list of all visible access points — SSID, channel, RSSI bar, security (Open/WEP/WPA/WPA2/WPA3). Sorted by signal strength. Updates every 30 seconds. Works without monitor mode. |
 | **13** | **Shady Networks** | Suspicious network analyzer — scores each visible AP for evil-twin attacks, open networks, hidden SSIDs, suspiciously strong signals, and malicious SSID patterns. Color-coded threat/warning/clean status. |
 | **14** | **BLE Devices** | Bluetooth LE device scanner — lists all nearby BLE devices with MAC, name, and RSSI bar. Flags devices matching known card-skimmer OUI prefixes or suspicious device names. |
+| **15** | **Pi-hole Stats** | DNS block rate %, queries/min, total/blocked counts, top 3 blocked domains. Requires Pi-hole IP set in setup portal. |
+| **16** | **DNS Clients** | Top DNS clients by query count, cross-referenced with Pi.Alert device names. Unknown IPs shown in dim color. Requires Pi-hole IP set in setup portal. |
 
 ---
 
@@ -160,8 +162,20 @@ Most modes require custom API endpoints added to Pi.Alert's `index.php`. Modes 1
 | 12 — WiFi AP Scan | *(file-based)* | **Yes — patch index.php + wifi_scan_daemon.py** |
 | 13 — Shady Networks | *(file-based)* | **Yes — patch index.php + wifi_scan_daemon.py** |
 | 14 — BLE Devices | *(file-based)* | **Yes — patch index.php + ble_scan_daemon.py** |
+| 15 — Pi-hole Stats | Pi-hole v6 `/api/stats/*` | **No — enter Pi-hole IP in setup portal** |
+| 16 — DNS Clients | Pi-hole v6 `/api/stats/*` | **No — enter Pi-hole IP in setup portal** |
 
 > 💡 If you only want basic network monitoring, Modes 0–2 work with a stock Pi.Alert install. Use the [Mode Manager](#mode-manager-toggle-modes-onoff) to disable everything else.
+
+### Pi-hole Setup (Modes 15 & 16 — Optional)
+
+Modes 15 and 16 require [Pi-hole v6](https://pi-hole.net/) running on your network. No API key is needed — Pi-hole v6 exposes public stats endpoints by default.
+
+1. Hold the **BOOT button for 3 seconds** to open the WiFi/setup portal
+2. Enter your Pi-hole IP in the **Pi-hole Host** field (e.g. `192.168.0.103`)
+3. Save — the device will reboot and Modes 15 & 16 will become active
+
+Leave the Pi-hole Host field blank to disable these modes entirely.
 
 ---
 
