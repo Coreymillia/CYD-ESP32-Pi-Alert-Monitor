@@ -15,6 +15,9 @@ static char pa_wifi_ssid[64]  = "";
 static char pa_wifi_pass[64]  = "";
 static char pa_host[64]       = "";  // Pi.Alert IP or hostname
 static char pa_apikey[128]    = "";  // Pi.Alert API key
+static char ph_host[64]       = "";  // Pi-hole IP or hostname (optional)
+// ph_host is also referenced in PiHole.h — declared here so Portal.h
+// can load/save it before PiHole.h fetch functions run.
 static bool pa_has_settings   = false;
 static bool pa_force_portal   = false;
 
@@ -35,6 +38,7 @@ static void paLoadSettings() {
   String pass   = prefs.getString("pass",    "");
   String host   = prefs.getString("pahost",  "");
   String apikey = prefs.getString("paapikey","");
+  String phhost = prefs.getString("phhost",  "");
   bool   force  = prefs.getBool("forceportal", false);
   prefs.end();
 
@@ -49,24 +53,28 @@ static void paLoadSettings() {
   pass.toCharArray(pa_wifi_pass, sizeof(pa_wifi_pass));
   host.toCharArray(pa_host,      sizeof(pa_host));
   apikey.toCharArray(pa_apikey,  sizeof(pa_apikey));
+  phhost.toCharArray(ph_host,    sizeof(ph_host));
   pa_has_settings = (ssid.length() > 0 && host.length() > 0 && apikey.length() > 0);
   pa_force_portal = force;
 }
 
 static void paSaveSettings(const char *ssid, const char *pass,
-                            const char *host, const char *apikey) {
+                            const char *host, const char *apikey,
+                            const char *phhost) {
   Preferences prefs;
   prefs.begin("cydpialert", false);
   prefs.putString("ssid",     ssid);
   prefs.putString("pass",     pass);
   prefs.putString("pahost",   host);
   prefs.putString("paapikey", apikey);
+  prefs.putString("phhost",   phhost);
   prefs.end();
 
   strncpy(pa_wifi_ssid, ssid,   sizeof(pa_wifi_ssid)  - 1);
   strncpy(pa_wifi_pass, pass,   sizeof(pa_wifi_pass)  - 1);
   strncpy(pa_host,      host,   sizeof(pa_host)       - 1);
   strncpy(pa_apikey,    apikey, sizeof(pa_apikey)     - 1);
+  strncpy(ph_host,      phhost, sizeof(ph_host)       - 1);
   pa_has_settings = true;
 }
 
@@ -164,6 +172,11 @@ static void paHandleRoot() {
     "<input type='password' name='paapikey' value='";
   html += String(pa_apikey);
   html += "' placeholder='Set in Pi.Alert \u2192 Maintenance \u2192 API Key' maxlength='127' required>"
+    "<hr>"
+    "<label>Pi-hole IP / Hostname: <span style='color:#445566;font-weight:normal'>(optional)</span></label>"
+    "<input type='text' name='phhost' value='";
+  html += String(ph_host);
+  html += "' placeholder='e.g. 192.168.0.103 — leave blank to disable Pi-hole modes' maxlength='63'>"
     "<br><button class='btn btn-save' type='submit'>&#128190; Save &amp; Connect</button>"
     "</form>";
   if (pa_has_settings) {
@@ -183,6 +196,7 @@ static void paHandleSave() {
   String pass   = portalServer->hasArg("pass")     ? portalServer->arg("pass")     : "";
   String host   = portalServer->hasArg("pahost")   ? portalServer->arg("pahost")   : "";
   String apikey = portalServer->hasArg("paapikey") ? portalServer->arg("paapikey") : "";
+  String phhost = portalServer->hasArg("phhost")   ? portalServer->arg("phhost")   : "";
 
   if (ssid.length() == 0) {
     portalServer->send(400, "text/html",
@@ -209,18 +223,22 @@ static void paHandleSave() {
     return;
   }
 
-  paSaveSettings(ssid.c_str(), pass.c_str(), host.c_str(), apikey.c_str());
+  paSaveSettings(ssid.c_str(), pass.c_str(), host.c_str(), apikey.c_str(), phhost.c_str());
 
-  portalServer->send(200, "text/html",
+  String confirmHtml =
     "<html><head><meta charset='UTF-8'>"
     "<style>body{background:#0d0d1a;color:#00ccff;font-family:Arial;"
     "text-align:center;padding:40px;}h2{color:#00ffff;}"
     "p{color:#88aacc;}</style></head><body>"
     "<h2>&#9989; Settings Saved!</h2>"
     "<p>WiFi: <b>" + ssid + "</b></p>"
-    "<p>Pi.Alert: <b>" + host + "</b></p>"
-    "<p>You can close this page and disconnect from <b>CYDPiAlert_Setup</b>.</p>"
-    "</body></html>");
+    "<p>Pi.Alert: <b>" + host + "</b></p>";
+  if (phhost.length() > 0) {
+    confirmHtml += "<p>Pi-hole: <b>" + phhost + "</b></p>";
+  }
+  confirmHtml += "<p>You can close this page and disconnect from <b>CYDPiAlert_Setup</b>.</p>"
+    "</body></html>";
+  portalServer->send(200, "text/html", confirmHtml);
 
   delay(1500);
   portalDone = true;
