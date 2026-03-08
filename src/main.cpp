@@ -900,6 +900,12 @@ void drawArpAlerts() {
     snprintf(macLine, sizeof(macLine), "%s>%s", a.old_mac, a.new_mac);
     gfx->print(macLine);
   }
+
+  // Hint: long-press to reset baseline
+  gfx->setTextColor(0x2945);  // very dim
+  gfx->setTextSize(1);
+  gfx->setCursor(2, gfx->height() - 12);
+  gfx->print("hold 1.5s to reset baseline");
 }
 
 // ---------------------------------------------------------------------------
@@ -1080,6 +1086,12 @@ void drawArpStatus() {
     gfx->setTextColor(COLOR_DIM); gfx->setCursor(162, y); gfx->print(e.ts);
     y += 9;
   }
+
+  // Hint: long-press to reset baseline
+  gfx->setTextColor(0x2945);  // very dim
+  gfx->setTextSize(1);
+  gfx->setCursor(2, gfx->height() - 12);
+  gfx->print("hold 1.5s to reset baseline");
 }
 
 // ---------------------------------------------------------------------------
@@ -1807,19 +1819,37 @@ void loop() {
     lastRefresh = millis();
   }
 
-  // Touch: left half = previous mode, right half = next mode
+  // Touch: left half = previous mode, right half = next mode.
+  // Long-press (1.5 s) on ARP screens resets the anomaly baseline.
   if (ts.tirqTouched() && ts.touched()) {
     unsigned long now = millis();
     if (now - lastTouchTime > TOUCH_DEBOUNCE) {
       lastTouchTime = now;
       TS_Point p = ts.getPoint();
-      int tx = map(p.x, 200, 3900, 0, gfx->width());
-      tx = constrain(tx, 0, gfx->width() - 1);
-      if (tx < gfx->width() / 2)
-        changeMode(-1);
-      else
-        changeMode(+1);
-      lastRefresh = millis();
+      unsigned long touchStart = millis();
+      bool longPress = false;
+      while (ts.touched()) {
+        if (millis() - touchStart > 1500) { longPress = true; break; }
+        delay(20);
+      }
+      while (ts.touched()) delay(20);  // wait for lift
+
+      if (longPress && (currentMode == MODE_ARP || currentMode == MODE_ARP_STATUS)) {
+        showStatus("Resetting ARP baseline...");
+        String dummy;
+        paPost("arp-reset", dummy);
+        delay(1200);
+        refreshDisplay();
+        lastRefresh = millis();
+      } else if (!longPress) {
+        int tx = map(p.x, 200, 3900, 0, gfx->width());
+        tx = constrain(tx, 0, gfx->width() - 1);
+        if (tx < gfx->width() / 2)
+          changeMode(-1);
+        else
+          changeMode(+1);
+        lastRefresh = millis();
+      }
     }
   }
 
