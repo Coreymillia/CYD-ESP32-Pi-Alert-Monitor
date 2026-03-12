@@ -78,7 +78,10 @@ static unsigned long lastTouchTime = 0;
 #define MODE_BLE         14
 #define MODE_PIHOLE_STATS   15
 #define MODE_PIHOLE_CLIENTS 16
-#define NUM_MODES        17
+#define MODE_PIHOLE_FEED    17
+#define MODE_PIHOLE_TOP_BLOCKED 18
+#define MODE_PIHOLE_ACTIVITY 19
+#define NUM_MODES        20
 
 static int  currentMode            = MODE_DASHBOARD;
 static bool modeHasData[NUM_MODES] = {false};
@@ -101,7 +104,10 @@ static const char *modeTitle[] = {
   "Shady Networks",
   "BLE Devices",
   "Pi-hole Stats",
-  "DNS Clients"
+  "DNS Clients",
+  "DNS Live Feed",
+  "Top Blocked",
+  "24h Activity"
 };
 
 // ---------------------------------------------------------------------------
@@ -273,6 +279,28 @@ void drawChrome() {
       gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP");
       gfx->setCursor(26,  COLHDR_Y + 1); gfx->print("DEVICE");
       gfx->setCursor(206, COLHDR_Y + 1); gfx->print("QUERIES");
+    }
+  } else if (currentMode == MODE_PIHOLE_FEED) {
+    if (ph_host[0] == '\0') {
+      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("Set Pi-hole IP in setup portal");
+    } else {
+      gfx->setCursor(2,   COLHDR_Y + 1); gfx->print(".IP");
+      gfx->setCursor(26,  COLHDR_Y + 1); gfx->print("DOMAIN");
+      gfx->setCursor(gfx->width() - 14, COLHDR_Y + 1); gfx->print("A/B");
+    }
+  } else if (currentMode == MODE_PIHOLE_TOP_BLOCKED) {
+    if (ph_host[0] == '\0') {
+      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("Set Pi-hole IP in setup portal");
+    } else {
+      gfx->setCursor(2,   COLHDR_Y + 1); gfx->print("#");
+      gfx->setCursor(16,  COLHDR_Y + 1); gfx->print("DOMAIN");
+      gfx->setCursor(206, COLHDR_Y + 1); gfx->print("HITS");
+    }
+  } else if (currentMode == MODE_PIHOLE_ACTIVITY) {
+    if (ph_host[0] == '\0') {
+      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("Set Pi-hole IP in setup portal");
+    } else {
+      gfx->setCursor(2, COLHDR_Y + 1); gfx->print("24h DNS Activity Chart");
     }
   }
   // MODE_DASHBOARD: no column headers
@@ -1487,7 +1515,201 @@ void drawPiHoleClients() {
 }
 
 // ---------------------------------------------------------------------------
+// Mode 17 — DNS Live Feed: last 10 queries, colour-coded allow/block
+// ---------------------------------------------------------------------------
+void drawPiHoleFeed() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (ph_host[0] == '\0') {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("Enter Pi-hole IP in setup portal.");
+    return;
+  }
+
+  if (ph_query_count == 0) {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No query data from Pi-hole.");
+    return;
+  }
+
+  // Columns: .IP (24px) | DOMAIN (fills remaining) | A/B badge (16px)
+  const int ipColW   = 24;
+  const int badgeW   = 16;
+  const int nameColW = gfx->width() - ipColW - badgeW - 4;
+  const int nameChars = nameColW / 6;
+  const int rowH     = 20;
+
+  gfx->drawFastVLine(ipColW, ROWS_Y, gfx->height() - ROWS_Y, COLOR_DIM);
+
+  for (int i = 0; i < ph_query_count; i++) {
+    int y = ROWS_Y + i * rowH;
+    if (y + rowH > gfx->height()) break;
+
+    PiQuery &q = ph_queries[i];
+
+    // ── Client last octet ──────────────────────────────────────────────────
+    char octet[6];
+    phLastOctet(q.client, octet, sizeof(octet));
+    char ipBuf[8];
+    snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(2, y + 6);
+    gfx->print(ipBuf);
+
+    // ── Domain (truncated) ────────────────────────────────────────────────
+    char domBuf[nameChars + 1];
+    truncate(q.domain, domBuf, nameChars);
+    gfx->setTextColor(q.allowed ? COLOR_TEXT : COLOR_NEW);
+    gfx->setCursor(ipColW + 2, y + 6);
+    gfx->print(domBuf);
+
+    // ── A / B badge ───────────────────────────────────────────────────────
+    uint16_t badgeColor = q.allowed ? COLOR_ONLINE : COLOR_NEW;
+    gfx->setTextColor(badgeColor);
+    gfx->setCursor(gfx->width() - badgeW + 2, y + 6);
+    gfx->print(q.allowed ? "A" : "B");
+
+    gfx->drawFastHLine(ipColW + 1, y + rowH - 1, gfx->width() - ipColW - 1, 0x1082);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode 18 — Top Blocked Domains: full ranked list
+// ---------------------------------------------------------------------------
+void drawPiHoleTopBlocked() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (ph_host[0] == '\0') {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("Enter Pi-hole IP in setup portal.");
+    return;
+  }
+
+  if (ph_top_blocked_count == 0) {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No blocked domain data.");
+    return;
+  }
+
+  const int rankW    = 14;
+  const int nameColW = gfx->width() - rankW - 44;
+  const int nameChars = nameColW / 6;
+  const int rowH     = 20;
+
+  gfx->drawFastVLine(rankW, ROWS_Y, gfx->height() - ROWS_Y, COLOR_DIM);
+
+  for (int i = 0; i < ph_top_blocked_count; i++) {
+    int y = ROWS_Y + i * rowH;
+    if (y + rowH > gfx->height()) break;
+
+    PiBlockEntry &e = ph_top_blocked[i];
+
+    // ── Rank ──────────────────────────────────────────────────────────────
+    char rankBuf[4];
+    snprintf(rankBuf, sizeof(rankBuf), "%d", i + 1);
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(2, y + 6);
+    gfx->print(rankBuf);
+
+    // ── Domain ────────────────────────────────────────────────────────────
+    char domBuf[nameChars + 1];
+    truncate(e.domain, domBuf, nameChars);
+    gfx->setTextColor(COLOR_NEW);
+    gfx->setCursor(rankW + 2, y + 6);
+    gfx->print(domBuf);
+
+    // ── Count (right-aligned) ─────────────────────────────────────────────
+    char cntBuf[10];
+    if (e.count >= 1000)
+      snprintf(cntBuf, sizeof(cntBuf), "%ld,%03ld", e.count / 1000, e.count % 1000);
+    else
+      snprintf(cntBuf, sizeof(cntBuf), "%ld", e.count);
+    gfx->setTextColor(COLOR_DIM);
+    gfx->setCursor(gfx->width() - strlen(cntBuf) * 6 - 2, y + 6);
+    gfx->print(cntBuf);
+
+    gfx->drawFastHLine(rankW + 1, y + rowH - 1, gfx->width() - rankW - 1, 0x1082);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode 19 — 24h Activity: stacked bar chart (144 x 10-min buckets)
+// ---------------------------------------------------------------------------
+void drawPiHoleActivity() {
+  gfx->fillRect(0, ROWS_Y, gfx->width(), gfx->height() - ROWS_Y, RGB565_BLACK);
+
+  if (ph_host[0] == '\0') {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("Enter Pi-hole IP in setup portal.");
+    return;
+  }
+
+  if (ph_history_count == 0) {
+    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
+    gfx->setCursor(4, ROWS_Y + 7);
+    gfx->print("No history data from Pi-hole.");
+    return;
+  }
+
+  const int chartTop    = ROWS_Y + 4;
+  const int chartBottom = gfx->height() - 16;
+  const int chartH      = chartBottom - chartTop;
+  const int chartW      = gfx->width() - 4;
+  const int barCount    = ph_history_count;
+  const float barW      = (float)chartW / barCount;
+
+  // Find max total for scaling
+  int maxTotal = 1;
+  for (int i = 0; i < barCount; i++)
+    if (ph_history[i].total > maxTotal) maxTotal = ph_history[i].total;
+
+  for (int i = 0; i < barCount; i++) {
+    int x = 2 + (int)(i * barW);
+    int w = (int)barW;
+    if (w < 1) w = 1;
+
+    int total   = ph_history[i].total;
+    int blocked = ph_history[i].blocked;
+    int allowed = total - blocked;
+
+    int totalBarH   = (int)((float)total   / maxTotal * chartH);
+    int blockedBarH = (int)((float)blocked / maxTotal * chartH);
+    int allowedBarH = totalBarH - blockedBarH;
+
+    // Draw allowed (bottom, green)
+    if (allowedBarH > 0)
+      gfx->fillRect(x, chartBottom - totalBarH, w, allowedBarH, COLOR_ONLINE);
+
+    // Draw blocked (top, red)
+    if (blockedBarH > 0)
+      gfx->fillRect(x, chartBottom - blockedBarH, w, blockedBarH, COLOR_NEW);
+  }
+
+  // Axis line
+  gfx->drawFastHLine(2, chartBottom, chartW, COLOR_DIM);
+
+  // Legend
+  gfx->setTextSize(1);
+  gfx->setTextColor(COLOR_ONLINE);
+  gfx->setCursor(4, chartBottom + 4);
+  gfx->print("Allowed");
+  gfx->setTextColor(COLOR_NEW);
+  gfx->setCursor(60, chartBottom + 4);
+  gfx->print("Blocked");
+  // Right side: show window label
+  gfx->setTextColor(COLOR_DIM);
+  gfx->setCursor(gfx->width() - 42, chartBottom + 4);
+  gfx->print("24h/10m");
+}
+
+// ---------------------------------------------------------------------------
 // Fetch + redraw for the current mode
+// ---------------------------------------------------------------------------
 void refreshDisplay() {
   // ESP Devices scan is slow — update only the header bar so the previous results
   // stay visible on screen instead of going blank for the entire scan duration.
@@ -1534,8 +1756,13 @@ void refreshDisplay() {
     ok = ok1;  // show clients even if Pi.Alert name lookup fails
     (void)ok2;
   }
+  if (currentMode == MODE_PIHOLE_FEED)        ok = phFetch();
+  if (currentMode == MODE_PIHOLE_TOP_BLOCKED) ok = phFetchTopBlocked();
+  if (currentMode == MODE_PIHOLE_ACTIVITY)    ok = phFetchHistory();
   // Pi-hole modes show a helpful message when ph_host is empty — treat as ok
-  if ((currentMode == MODE_PIHOLE_STATS || currentMode == MODE_PIHOLE_CLIENTS) && ph_host[0] == '\0') {
+  if ((currentMode == MODE_PIHOLE_STATS   || currentMode == MODE_PIHOLE_CLIENTS   ||
+       currentMode == MODE_PIHOLE_FEED    || currentMode == MODE_PIHOLE_TOP_BLOCKED ||
+       currentMode == MODE_PIHOLE_ACTIVITY) && ph_host[0] == '\0') {
     ok = true;
   }
 
@@ -1556,8 +1783,11 @@ void refreshDisplay() {
     if (currentMode == MODE_WIFI_SCAN)   drawWifiScan();
     if (currentMode == MODE_WIFI_SHADY)  drawWifiShady();
     if (currentMode == MODE_BLE)         drawBleDevices();
-    if (currentMode == MODE_PIHOLE_STATS)   drawPiHoleStats();
-    if (currentMode == MODE_PIHOLE_CLIENTS) drawPiHoleClients();
+    if (currentMode == MODE_PIHOLE_STATS)        drawPiHoleStats();
+    if (currentMode == MODE_PIHOLE_CLIENTS)      drawPiHoleClients();
+    if (currentMode == MODE_PIHOLE_FEED)         drawPiHoleFeed();
+    if (currentMode == MODE_PIHOLE_TOP_BLOCKED)  drawPiHoleTopBlocked();
+    if (currentMode == MODE_PIHOLE_ACTIVITY)     drawPiHoleActivity();
   } else if (modeHasData[currentMode]) {
     gfx->fillRect(0, HEADER_Y, gfx->width(), HEADER_H, 0x3000);  // dark red
     char errMsg[52];
@@ -1584,7 +1814,7 @@ void refreshDisplay() {
 static void loadModeEnabled() {
   Preferences prefs;
   prefs.begin("cydpialert", true);
-  uint32_t mask = prefs.getUInt("modemask32", 0x7FFF);
+  uint32_t mask = prefs.getUInt("modemask32", 0xFFFFF);  // all 20 modes enabled by default
   prefs.end();
   for (int i = 0; i < NUM_MODES; i++)
     modeEnabled[i] = (mask >> i) & 1;

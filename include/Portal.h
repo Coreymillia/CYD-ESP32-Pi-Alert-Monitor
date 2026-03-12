@@ -15,9 +15,11 @@ static char pa_wifi_ssid[64]  = "";
 static char pa_wifi_pass[64]  = "";
 static char pa_host[64]       = "";  // Pi.Alert IP or hostname
 static char pa_apikey[128]    = "";  // Pi.Alert API key
-static char ph_host[64]       = "";  // Pi-hole IP or hostname (optional)
-// ph_host is also referenced in PiHole.h — declared here so Portal.h
-// can load/save it before PiHole.h fetch functions run.
+static char ph_host[64]       = "";    // Pi-hole IP or hostname (optional)
+static uint16_t ph_port       = 80;   // Pi-hole web UI port (default 80, use 8080 if sharing Pi with Pi-Alert)
+static char ph_pass[64]       = "";   // Pi-hole admin password (optional, empty = passwordless)
+// ph_host, ph_port, ph_pass are also referenced in PiHole.h — declared here so Portal.h
+// can load/save them before PiHole.h fetch functions run.
 static bool pa_has_settings   = false;
 static bool pa_force_portal   = false;
 
@@ -39,6 +41,8 @@ static void paLoadSettings() {
   String host   = prefs.getString("pahost",  "");
   String apikey = prefs.getString("paapikey","");
   String phhost = prefs.getString("phhost",  "");
+  uint16_t phport = (uint16_t)prefs.getUInt("phport", 80);
+  String phpass = prefs.getString("phpass",  "");
   bool   force  = prefs.getBool("forceportal", false);
   prefs.end();
 
@@ -54,13 +58,15 @@ static void paLoadSettings() {
   host.toCharArray(pa_host,      sizeof(pa_host));
   apikey.toCharArray(pa_apikey,  sizeof(pa_apikey));
   phhost.toCharArray(ph_host,    sizeof(ph_host));
+  ph_port         = phport;
+  phpass.toCharArray(ph_pass,    sizeof(ph_pass));
   pa_has_settings = (ssid.length() > 0 && host.length() > 0 && apikey.length() > 0);
   pa_force_portal = force;
 }
 
 static void paSaveSettings(const char *ssid, const char *pass,
                             const char *host, const char *apikey,
-                            const char *phhost) {
+                            const char *phhost, uint16_t phport, const char *phpass) {
   Preferences prefs;
   prefs.begin("cydpialert", false);
   prefs.putString("ssid",     ssid);
@@ -68,6 +74,8 @@ static void paSaveSettings(const char *ssid, const char *pass,
   prefs.putString("pahost",   host);
   prefs.putString("paapikey", apikey);
   prefs.putString("phhost",   phhost);
+  prefs.putUInt("phport",     phport);
+  prefs.putString("phpass",   phpass);
   prefs.end();
 
   strncpy(pa_wifi_ssid, ssid,   sizeof(pa_wifi_ssid)  - 1);
@@ -75,6 +83,8 @@ static void paSaveSettings(const char *ssid, const char *pass,
   strncpy(pa_host,      host,   sizeof(pa_host)       - 1);
   strncpy(pa_apikey,    apikey, sizeof(pa_apikey)     - 1);
   strncpy(ph_host,      phhost, sizeof(ph_host)       - 1);
+  ph_port         = phport;
+  strncpy(ph_pass,      phpass, sizeof(ph_pass)       - 1);
   pa_has_settings = true;
 }
 
@@ -176,7 +186,15 @@ static void paHandleRoot() {
     "<label>Pi-hole IP / Hostname: <span style='color:#445566;font-weight:normal'>(optional)</span></label>"
     "<input type='text' name='phhost' value='";
   html += String(ph_host);
-  html += "' placeholder='e.g. 192.168.0.103 — leave blank to disable Pi-hole modes' maxlength='63'>"
+  html += "' placeholder='e.g. 192.168.0.105 — leave blank to disable Pi-hole modes' maxlength='63'>"
+    "<label>Pi-hole Port: <span style='color:#445566;font-weight:normal'>(optional, default 80)</span></label>"
+    "<input type='number' name='phport' value='";
+  html += String(ph_port);
+  html += "' placeholder='80' min='1' max='65535'>"
+    "<label>Pi-hole Password: <span style='color:#445566;font-weight:normal'>(optional, leave blank if none)</span></label>"
+    "<input type='password' name='phpass' value='";
+  html += String(ph_pass);
+  html += "' placeholder='Leave blank if passwordless' maxlength='63'>"
     "<br><button class='btn btn-save' type='submit'>&#128190; Save &amp; Connect</button>"
     "</form>";
   if (pa_has_settings) {
@@ -197,6 +215,9 @@ static void paHandleSave() {
   String host   = portalServer->hasArg("pahost")   ? portalServer->arg("pahost")   : "";
   String apikey = portalServer->hasArg("paapikey") ? portalServer->arg("paapikey") : "";
   String phhost = portalServer->hasArg("phhost")   ? portalServer->arg("phhost")   : "";
+  uint16_t phport = portalServer->hasArg("phport") ? (uint16_t)portalServer->arg("phport").toInt() : 80;
+  if (phport == 0) phport = 80;
+  String phpass = portalServer->hasArg("phpass")   ? portalServer->arg("phpass")   : "";
 
   if (ssid.length() == 0) {
     portalServer->send(400, "text/html",
@@ -223,7 +244,7 @@ static void paHandleSave() {
     return;
   }
 
-  paSaveSettings(ssid.c_str(), pass.c_str(), host.c_str(), apikey.c_str(), phhost.c_str());
+  paSaveSettings(ssid.c_str(), pass.c_str(), host.c_str(), apikey.c_str(), phhost.c_str(), phport, phpass.c_str());
 
   String confirmHtml =
     "<html><head><meta charset='UTF-8'>"
