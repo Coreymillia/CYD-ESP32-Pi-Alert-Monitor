@@ -2037,14 +2037,17 @@ void setup() {
 }
 
 // ---------------------------------------------------------------------------
-// Loop — refresh every 30 seconds
+// Loop — refresh every 30 seconds (5 seconds for DNS Live Feed)
 // ---------------------------------------------------------------------------
-#define REFRESH_INTERVAL (30 * 1000UL)
+#define REFRESH_INTERVAL      (30 * 1000UL)
+#define REFRESH_INTERVAL_FEED ( 5 * 1000UL)
 unsigned long lastRefresh = 0;
 
 void loop() {
   checkButton();
-  if (lastRefresh == 0 || (millis() - lastRefresh) >= REFRESH_INTERVAL) {
+  unsigned long refreshInterval = (currentMode == MODE_PIHOLE_FEED)
+                                   ? REFRESH_INTERVAL_FEED : REFRESH_INTERVAL;
+  if (lastRefresh == 0 || (millis() - lastRefresh) >= refreshInterval) {
     refreshDisplay();
     lastRefresh = millis();
   }
@@ -2083,11 +2086,11 @@ void loop() {
     }
   }
 
-  // Countdown bar: 1px at y=239, drains left→right over REFRESH_INTERVAL
+  // Countdown bar: 1px at y=239, drains left→right over the active refresh interval
   unsigned long elapsed = millis() - lastRefresh;
-  int barW = (elapsed >= REFRESH_INTERVAL)
+  int barW = (elapsed >= refreshInterval)
              ? 0
-             : (int)((REFRESH_INTERVAL - elapsed) * (long)gfx->width() / REFRESH_INTERVAL);
+             : (int)((refreshInterval - elapsed) * (long)gfx->width() / refreshInterval);
   gfx->drawFastHLine(0,    gfx->height() - 1, barW,                RGB565_BLUE);
   gfx->drawFastHLine(barW, gfx->height() - 1, gfx->width() - barW, RGB565_BLACK);
 
