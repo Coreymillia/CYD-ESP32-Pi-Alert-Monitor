@@ -29,6 +29,7 @@ struct ArpStatusData {
 #define ARP_MAX_TALKERS 5
 struct ArpTalker {
   char ip[16];
+  char name[32];
   int  count;
 };
 
@@ -36,6 +37,7 @@ struct ArpTalker {
 struct ArpLastEvent {
   char ip[16];
   char mac[18];
+  char name[32];
   char type[8];   // "request" | "reply"
   char ts[9];     // "HH:MM:SS"
 };
@@ -98,14 +100,15 @@ static bool paFetchArpStatus() {
   arp_status_data.gw_mac_changes  = doc["gateway_mac_changes"]  | 0;
   arp_status_data.valid           = true;
 
-  // --- Top talkers ---
   arp_talker_count = 0;
   JsonArray talkers = doc["top_talkers"].as<JsonArray>();
   if (!talkers.isNull()) {
     for (JsonObject t : talkers) {
       if (arp_talker_count >= ARP_MAX_TALKERS) break;
-      strncpy(arp_talkers[arp_talker_count].ip, t["ip"] | "", sizeof(ArpTalker::ip) - 1);
-      arp_talkers[arp_talker_count].ip[sizeof(ArpTalker::ip)-1] = '\0';
+      strncpy(arp_talkers[arp_talker_count].ip,   t["ip"]   | "", sizeof(ArpTalker::ip)   - 1);
+      strncpy(arp_talkers[arp_talker_count].name, t["name"] | "", sizeof(ArpTalker::name) - 1);
+      arp_talkers[arp_talker_count].ip[sizeof(ArpTalker::ip)-1]     = '\0';
+      arp_talkers[arp_talker_count].name[sizeof(ArpTalker::name)-1] = '\0';
       arp_talkers[arp_talker_count].count = t["count"] | 0;
       arp_talker_count++;
     }
@@ -120,10 +123,12 @@ static bool paFetchArpStatus() {
       ArpLastEvent &e = arp_last_events[arp_last_event_count++];
       strncpy(e.ip,   ev["ip"]   | "",        sizeof(e.ip)   - 1);
       strncpy(e.mac,  ev["mac"]  | "",        sizeof(e.mac)  - 1);
+      strncpy(e.name, ev["name"] | "",        sizeof(e.name) - 1);
       strncpy(e.type, ev["type"] | "request", sizeof(e.type) - 1);
       strncpy(e.ts,   ev["ts"]   | "",        sizeof(e.ts)   - 1);
       e.ip[sizeof(e.ip)-1]     = '\0';
       e.mac[sizeof(e.mac)-1]   = '\0';
+      e.name[sizeof(e.name)-1] = '\0';
       e.type[sizeof(e.type)-1] = '\0';
       e.ts[sizeof(e.ts)-1]     = '\0';
     }

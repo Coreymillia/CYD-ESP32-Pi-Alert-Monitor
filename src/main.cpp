@@ -1055,9 +1055,9 @@ void drawArpStatus() {
   gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("TOP TALKERS");
   y += 9;
 
-  const int ipColW  = 28;
-  const int cntColW = 24;
-  const int barMaxW = gfx->width() - ipColW - cntColW - 4;
+  const int labelColW = 76;   // wide enough for ~12-char names
+  const int cntColW   = 24;
+  const int barMaxW   = gfx->width() - labelColW - cntColW - 4;
   int maxCount = 1;
   for (int i = 0; i < arp_talker_count; i++)
     if (arp_talkers[i].count > maxCount) maxCount = arp_talkers[i].count;
@@ -1067,15 +1067,22 @@ void drawArpStatus() {
     gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print("no data yet"); y += 10;
   }
   for (int i = 0; i < n; i++) {
-    char octet[6]; paLastOctet(arp_talkers[i].ip, octet, sizeof(octet));
-    char ipBuf[8]; snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
-    gfx->setTextColor(COLOR_DIM); gfx->setTextSize(1);
-    gfx->setCursor(2, y); gfx->print(ipBuf);
+    // Label: use name if available, fall back to .lastOctet
+    char label[14];
+    if (arp_talkers[i].name[0] != '\0') {
+      truncate(arp_talkers[i].name, label, 12);
+    } else {
+      char octet[6]; paLastOctet(arp_talkers[i].ip, octet, sizeof(octet));
+      snprintf(label, sizeof(label), ".%s", octet);
+    }
+    gfx->setTextColor(arp_talkers[i].name[0] != '\0' ? COLOR_ONLINE : COLOR_DIM);
+    gfx->setTextSize(1);
+    gfx->setCursor(2, y); gfx->print(label);
 
     int barW = (int)((long)arp_talkers[i].count * barMaxW / maxCount);
     if (barW < 1 && arp_talkers[i].count > 0) barW = 1;
-    gfx->fillRect(ipColW + 2, y, barW,          8, 0x2945);
-    gfx->fillRect(ipColW + 2 + barW, y, barMaxW - barW, 8, RGB565_BLACK);
+    gfx->fillRect(labelColW + 2, y, barW,              8, 0x2945);
+    gfx->fillRect(labelColW + 2 + barW, y, barMaxW - barW, 8, RGB565_BLACK);
 
     char cntBuf[8]; snprintf(cntBuf, sizeof(cntBuf), "%d", arp_talkers[i].count);
     gfx->setTextColor(COLOR_TEXT);
@@ -1097,13 +1104,18 @@ void drawArpStatus() {
     if (y > gfx->height() - 9) break;
     ArpLastEvent &e = arp_last_events[i];
 
-    // .IP
+    // .IP (last octet)
     char octet[6]; paLastOctet(e.ip, octet, sizeof(octet));
     char ipBuf[8]; snprintf(ipBuf, sizeof(ipBuf), ".%s", octet);
     gfx->setTextColor(COLOR_DIM); gfx->setCursor(2, y); gfx->print(ipBuf);
 
-    // MAC (full 17 chars)
-    gfx->setTextColor(0x4208); gfx->setCursor(32, y); gfx->print(e.mac);
+    // Name if known, otherwise full MAC
+    if (e.name[0] != '\0') {
+      char nameBuf[16]; truncate(e.name, nameBuf, 14);
+      gfx->setTextColor(COLOR_ONLINE); gfx->setCursor(32, y); gfx->print(nameBuf);
+    } else {
+      gfx->setTextColor(0x4208); gfx->setCursor(32, y); gfx->print(e.mac);
+    }
 
     // type: "rep" (green) or "req" (yellow)
     bool isReply = (strncmp(e.type, "reply", 5) == 0);
