@@ -22,6 +22,7 @@ static char ph_pass[64]       = "";   // Pi-hole admin password (optional, empty
 // can load/save them before PiHole.h fetch functions run.
 static bool pa_has_settings   = false;
 static bool pa_force_portal   = false;
+static uint8_t pa_brightness  = 200;   // backlight 10–255
 
 // ---------------------------------------------------------------------------
 // Portal state
@@ -62,11 +63,14 @@ static void paLoadSettings() {
   phpass.toCharArray(ph_pass,    sizeof(ph_pass));
   pa_has_settings = (ssid.length() > 0 && host.length() > 0 && apikey.length() > 0);
   pa_force_portal = force;
+  pa_brightness   = (uint8_t)prefs.getUChar("bright", 200);
+  if (pa_brightness < 10) pa_brightness = 10;
 }
 
 static void paSaveSettings(const char *ssid, const char *pass,
                             const char *host, const char *apikey,
-                            const char *phhost, uint16_t phport, const char *phpass) {
+                            const char *phhost, uint16_t phport, const char *phpass,
+                            uint8_t brightness) {
   Preferences prefs;
   prefs.begin("cydpialert", false);
   prefs.putString("ssid",     ssid);
@@ -76,6 +80,7 @@ static void paSaveSettings(const char *ssid, const char *pass,
   prefs.putString("phhost",   phhost);
   prefs.putUInt("phport",     phport);
   prefs.putString("phpass",   phpass);
+  prefs.putUChar("bright",    brightness);
   prefs.end();
 
   strncpy(pa_wifi_ssid, ssid,   sizeof(pa_wifi_ssid)  - 1);
@@ -85,6 +90,7 @@ static void paSaveSettings(const char *ssid, const char *pass,
   strncpy(ph_host,      phhost, sizeof(ph_host)       - 1);
   ph_port         = phport;
   strncpy(ph_pass,      phpass, sizeof(ph_pass)       - 1);
+  pa_brightness   = brightness;
   pa_has_settings = true;
 }
 
@@ -161,6 +167,9 @@ static void paHandleRoot() {
     ".btn-skip:hover{background:#223344;color:#aabbcc;}"
     ".note{color:#445566;font-size:0.82em;margin-top:16px;}"
     "hr{border:1px solid #113355;margin:20px 0;}"
+    ".rng{display:flex;align-items:center;gap:8px;margin:6px 0 14px;}"
+    ".rng input[type=range]{flex:1;accent-color:#00ccff;}"
+    ".rng output{min-width:28px;text-align:right;color:#88ddff;}"
     "</style></head><body>"
     "<h1>&#128273; CYDPiAlert Setup</h1>"
     "<p>Enter your WiFi and Pi.Alert credentials.</p>"
@@ -195,6 +204,12 @@ static void paHandleRoot() {
     "<input type='password' name='phpass' value='";
   html += String(ph_pass);
   html += "' placeholder='Leave blank if passwordless' maxlength='63'>"
+    "<label>Brightness:</label>"
+    "<div class='rng'><input type='range' name='bright' min='10' max='255' value='";
+  html += String(pa_brightness);
+  html += "' oninput='this.nextElementSibling.value=this.value'><output>";
+  html += String(pa_brightness);
+  html += "</output></div>"
     "<br><button class='btn btn-save' type='submit'>&#128190; Save &amp; Connect</button>"
     "</form>";
   if (pa_has_settings) {
@@ -244,7 +259,8 @@ static void paHandleSave() {
     return;
   }
 
-  paSaveSettings(ssid.c_str(), pass.c_str(), host.c_str(), apikey.c_str(), phhost.c_str(), phport, phpass.c_str());
+  paSaveSettings(ssid.c_str(), pass.c_str(), host.c_str(), apikey.c_str(), phhost.c_str(), phport, phpass.c_str(),
+    portalServer->hasArg("bright") ? (uint8_t)constrain(portalServer->arg("bright").toInt(), 10, 255) : 200);
 
   String confirmHtml =
     "<html><head><meta charset='UTF-8'>"

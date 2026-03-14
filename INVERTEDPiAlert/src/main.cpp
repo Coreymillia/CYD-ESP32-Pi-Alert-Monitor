@@ -1989,7 +1989,9 @@ void setup() {
   gfx->fillScreen(RGB565_BLACK);
 
   pinMode(GFX_BL, OUTPUT);
-  digitalWrite(GFX_BL, HIGH);
+  ledcSetup(0, 5000, 8);
+  ledcAttachPin(GFX_BL, 0);
+  ledcWrite(0, 255);
 
   pinMode(0, INPUT_PULLUP);
 
@@ -2000,6 +2002,7 @@ void setup() {
 
   paLoadSettings();
   loadModeEnabled();
+  ledcWrite(0, pa_brightness);
 
   bool showPortal = !pa_has_settings || pa_force_portal;
 
@@ -2018,6 +2021,7 @@ void setup() {
       delay(5);
     }
     paClosePortal();
+    ledcWrite(0, pa_brightness);
   }
 
   gfx->fillScreen(RGB565_BLACK);
